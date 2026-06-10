@@ -1,0 +1,413 @@
+// SPDX-License-Identifier: AGPL-3.0
+//
+// Calls — the DEFAULT landing tab for INTERACT. Voice/video first.
+// Top of screen: two big primary buttons (New meeting / Join with code).
+// Below: recent call history from /api/v1/meetings/log (already live).
+//
+// Polish pass (2026-05-22):
+// - withOpacity → withValues(alpha:) (Flutter 3.27+ deprecation)
+// - Direction badge per row (incoming / outgoing / missed)
+// - Time-since-call timestamp (Today 14:32, Yesterday, weekday, date)
+// - Empty state hints at "Join with code" too
+// - "All" button is now a future-stub but no longer dead-clickable
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
+import '../../services/talk_api.dart';
+import '../../utils/chat_formatters.dart';
+
+class CallsTab extends ConsumerStatefulWidget {
+  const CallsTab({super.key});
+  @override
+  ConsumerState<CallsTab> createState() => _CallsTabState();
+}
+
+class _CallsTabState extends ConsumerState<CallsTab> {
+  late Future<List<Map<String, dynamic>>> _history;
+
+  @override
+  void initState() {
+    super.initState();
+    _history = ref.read(talkApiProvider).callHistory();
+  }
+
+  Future<void> _newMeeting({String mode = 'video'}) async {
+    try {
+      // host=true makes MeetingRoomScreen mint a fresh room via
+      // createRoom() — we don't need the code from talk_api here, the
+      // route handles it. Pass mode for voice-only meetings.
+      if (!mounted) return;
+      context.push('/room?host=true&mode=$mode');
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not start meeting: $e')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      appBar: AppBar(
+        title: const Text('INTERACT'),
+        centerTitle: false,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.qr_code_scanner),
+            tooltip: 'Scan invite QR',
+            onPressed: () => context.push('/invite'),
+          ),
+        ],
+      ),
+      body: RefreshIndicator(
+        onRefresh: () async {
+          setState(() => _history = ref.read(talkApiProvider).callHistory());
+          await _history;
+        },
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            // Primary action row — two large tiles, calls-first
+            Row(
+              children: [
+                Expanded(
+                  child: _PrimaryAction(
+                    icon: Icons.video_call,
+                    color: cs.primary,
+                    label: 'New meeting',
+                    subtitle: 'Start now, share code',
+                    onTap: () => _newMeeting(mode: 'video'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _PrimaryAction(
+                    icon: Icons.dialpad,
+                    color: cs.secondary,
+                    label: 'Join with code',
+                    subtitle: 'Enter or scan',
+                    onTap: () => context.push('/invite'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            // Secondary "Voice only" tile — picked up by users on patchy
+            // connections, no auto-ring yet but mode=voice gets reflected
+            // in createRoom + leathx-signaling auth.
+            _SecondaryAction(
+              icon: Icons.phone_in_talk_outlined,
+              label: 'Voice-only meeting',
+              subtitle: 'Lower bandwidth — useful on slow networks',
+              onTap: () => _newMeeting(mode: 'voice'),
+            ),
+            const SizedBox(height: 24),
+            Row(
+              children: [
+                Text(
+                  'Recent calls',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const Spacer(),
+                TextButton.icon(
+                  icon: const Icon(Icons.history, size: 16),
+                  label: const Text('All'),
+                  onPressed: () {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Full history screen — Phase 1.5',
+                        ),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            FutureBuilder<List<Map<String, dynamic>>>(
+              future: _history,
+              builder: (ctx, snap) {
+                if (snap.connectionState != ConnectionState.done) {
+                  return const Padding(
+                    padding: EdgeInsets.all(40),
+                    child: Center(child: CircularProgressIndicator()),
+                  );
+                }
+                final rows = snap.data ?? const [];
+                if (rows.isEmpty) {
+                  return _EmptyCallState(
+                    onNew: () => _newMeeting(),
+                    onJoin: () => context.push('/invite'),
+                  );
+                }
+                return Column(
+                  children: rows.map((r) => _CallRow(row: r)).toList(),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PrimaryAction extends StatelessWidget {
+  const _PrimaryAction({
+    required this.icon,
+    required this.color,
+    required this.label,
+    required this.subtitle,
+    required this.onTap,
+  });
+  final IconData icon;
+  final Color color;
+  final String label;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: color.withValues(alpha: 0.1),
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon, color: color, size: 36),
+              const SizedBox(height: 12),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).colorScheme.outline,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SecondaryAction extends StatelessWidget {
+  const _SecondaryAction({
+    required this.icon,
+    required this.label,
+    required this.subtitle,
+    required this.onTap,
+  });
+  final IconData icon;
+  final String label;
+  final String subtitle;
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Material(
+      color: cs.surfaceContainerHighest.withValues(alpha: 0.6),
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(
+            children: [
+              Icon(icon, color: cs.primary, size: 24),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: cs.outline,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right, color: cs.outline),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CallRow extends StatelessWidget {
+  const _CallRow({required this.row});
+  final Map<String, dynamic> row;
+
+  /// Direction is one of 'incoming' / 'outgoing' / 'missed' — server
+  /// supplies it directly when known; otherwise we infer from
+  /// (durationSec == 0 ? missed : incoming). Outgoing requires the
+  /// log row to flag `direction:'outgoing'` explicitly.
+  String _direction() {
+    final d = row['direction'] as String?;
+    if (d != null && d.isNotEmpty) return d;
+    final dur = row['durationSec'] as int? ?? 0;
+    return dur == 0 ? 'missed' : 'incoming';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final mode = row['mode'] as String? ?? 'video';
+    final peer = row['peerName'] as String? ?? 'Unknown';
+    final dur = row['durationSec'] as int? ?? 0;
+    final dir = _direction();
+    final startedAtStr = row['startedAt'] as String?;
+    final startedAt = startedAtStr != null
+        ? DateTime.tryParse(startedAtStr)
+        : null;
+
+    final dirIcon = switch (dir) {
+      'outgoing' => Icons.call_made,
+      'missed' => Icons.call_missed,
+      _ => Icons.call_received,
+    };
+    final dirColor = switch (dir) {
+      'outgoing' => cs.primary,
+      'missed' => cs.error,
+      _ => cs.tertiary,
+    };
+
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+      leading: CircleAvatar(
+        backgroundColor: cs.primaryContainer,
+        child: Icon(
+          mode == 'voice' ? Icons.phone : Icons.videocam,
+          color: cs.onPrimaryContainer,
+          size: 20,
+        ),
+      ),
+      title: Row(
+        children: [
+          Expanded(
+            child: Text(
+              peer,
+              style: TextStyle(
+                color: dir == 'missed' ? cs.error : null,
+                fontWeight: dir == 'missed' ? FontWeight.w700 : FontWeight.w500,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (startedAt != null)
+            Text(
+              relTime(startedAt),
+              style: TextStyle(
+                fontSize: 11,
+                color: cs.outline,
+              ),
+            ),
+        ],
+      ),
+      subtitle: Row(
+        children: [
+          Icon(dirIcon, size: 13, color: dirColor),
+          const SizedBox(width: 4),
+          Text(
+            dir == 'missed' ? 'Missed' : callDuration(dur),
+            style: TextStyle(
+              fontSize: 12,
+              color: dir == 'missed' ? cs.error : cs.outline,
+            ),
+          ),
+        ],
+      ),
+      trailing: IconButton(
+        icon: Icon(mode == 'voice' ? Icons.phone : Icons.videocam),
+        tooltip: 'Call back',
+        onPressed: () {
+          final code = row['roomId']?.toString().split(':').last;
+          if (code == null || code.isEmpty) return;
+          GoRouter.of(context).push('/room?code=$code&mode=$mode');
+        },
+      ),
+    );
+  }
+}
+
+class _EmptyCallState extends StatelessWidget {
+  const _EmptyCallState({required this.onNew, required this.onJoin});
+  final VoidCallback onNew;
+  final VoidCallback onJoin;
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 40),
+      child: Column(
+        children: [
+          Icon(Icons.history_toggle_off, size: 40, color: cs.outline),
+          const SizedBox(height: 8),
+          Text(
+            'No calls yet',
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              color: cs.onSurface,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Start one now, or join with a code someone shared.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: cs.outline, fontSize: 12),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: onNew,
+                icon: const Icon(Icons.video_call, size: 18),
+                label: const Text('New meeting'),
+              ),
+              OutlinedButton.icon(
+                onPressed: onJoin,
+                icon: const Icon(Icons.dialpad, size: 18),
+                label: const Text('Join'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
