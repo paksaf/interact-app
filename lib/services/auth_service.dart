@@ -13,13 +13,45 @@
 //
 // Per memory `sso_interactpak`: the JWT verifies on every INTERACT app
 // (Pro, Sahulat, FleetOps, this app, etc.) without a separate sign-in.
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
 const _kBase = 'https://www.interactpak.com'; // apex redirects to www
+
+/// Network timeout for auth calls. Without this the Send-code / Verify
+/// buttons spin forever when the device can't reach the server — the exact
+/// "stuck after entering number" symptom seen on Android TV (flaky DNS).
+/// 25s is generous: the send route does a DB lookup + SMS dispatch.
+const _kAuthTimeout = Duration(seconds: 25);
+
+/// POST helper that always terminates: applies [_kAuthTimeout] and maps
+/// connection failures to a clear, TV-friendly message instead of a hang.
+Future<http.Response> _postJson(String url, Map<String, dynamic> body) async {
+  try {
+    return await http
+        .post(
+          Uri.parse(url),
+          headers: const {'Content-Type': 'application/json'},
+          body: jsonEncode(body),
+        )
+        .timeout(_kAuthTimeout);
+  } on TimeoutException {
+    throw Exception(
+        'Couldn’t reach INTERACT (timed out). Check this device’s internet '
+        'and DNS, then try again.');
+  } on SocketException {
+    throw Exception(
+        'No connection to INTERACT. Check Wi-Fi/DNS on this device '
+        '(try DNS 8.8.8.8), then try again.');
+  } on http.ClientException catch (e) {
+    throw Exception('Network error: ${e.message}. Check this device’s connection.');
+  }
+}
 const _kTokenKey = 'interact.auth.token';
 const _kPhoneKey = 'interact.auth.phone';
 const _kNameKey  = 'interact.auth.name';
@@ -33,7 +65,12 @@ const _kLocalUserIdKey = 'interact.auth.localUserId';
 final authServiceProvider = Provider<AuthService>((ref) => AuthService());
 
 class AuthService {
-  final _storage = const FlutterSecureStorage();
+  // 2026-06-11 fleet fix (interact_pro TV lesson): bare FlutterSecureStorage
+  // uses the legacy RSA-keystore backend which silently drops values on
+  // some devices (TVs especially). Always use EncryptedSharedPreferences.
+  final _storage = const FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
 
   // ── Local token helpers ──────────────────────────────────────────
   Future<bool> hasValidToken() async {
@@ -62,10 +99,9 @@ class AuthService {
   /// server still returns a 200 with a decoy otpId. Treat the response
   /// as opaque.
   Future<String> requestOtp(String phone) async {
-    final res = await http.post(
-      Uri.parse('$_kBase/api/auth/phone-login/send'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'phone': phone}),
+    final res = await _postJson(
+      '$_kBase/api/auth/phone-login/send',
+      {'phone': phone},
     );
     if (res.statusCode >= 400) {
       throw Exception('OTP send failed: ${res.statusCode} ${res.body}');
@@ -90,10 +126,9 @@ class AuthService {
     if (otpId == null || otpId.isEmpty) {
       throw Exception('No OTP request in flight — call requestOtp() first');
     }
-    final res = await http.post(
-      Uri.parse('$_kBase/api/auth/phone-login/verify'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'otpId': otpId, 'code': code}),
+    final res = await _postJson(
+      '$_kBase/api/auth/phone-login/verify',
+      {'otpId': otpId, 'code': code},
     );
     if (res.statusCode >= 400) {
       throw Exception('OTP verify failed: ${res.statusCode} ${res.body}');
