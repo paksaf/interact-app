@@ -122,8 +122,7 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
   Widget build(BuildContext context) {
     return PopScope(
       canPop: false,
-      // onPopInvoked (not ...WithResult) for Flutter >=3.22 compatibility.
-      onPopInvoked: (didPop) async {
+      onPopInvokedWithResult: (didPop, result) async {
         if (!didPop) await _leave();
       },
       child: Scaffold(
