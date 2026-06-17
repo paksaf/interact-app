@@ -33,6 +33,17 @@ dependencies:
   flutter_webrtc: ^1.4.1
   web_socket_channel: ^3.0.3
 
+  # ── Conferences / townhalls (LiveKit SFU) ───────────────────────────
+  # Multi-party path — the flutter_webrtc lines above stay for the 1:1 LAN
+  # mesh (meeting_room_screen.dart). This is the SCALABLE path: the same
+  # SFU ExecOS uses (wss://livekit.interactpak.com), joined via
+  # live_room_screen.dart + livekit_service.dart.
+  # NOTE: livekit_client ships flutter_webrtc in lockstep. If `flutter pub
+  # get` reports a flutter_webrtc conflict, let livekit_client drive the
+  # version (relax the `flutter_webrtc:` pin above to match livekit's
+  # transitive constraint — both layers share one native libwebrtc).
+  livekit_client: ^2.4.0
+
   # ── Phone OTP / sign-in ─────────────────────────────────────────────
   pin_code_fields: ^8.0.1
 

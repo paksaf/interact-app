@@ -12,16 +12,12 @@ import 'package:go_router/go_router.dart';
 class MenuTab extends StatelessWidget {
   const MenuTab({super.key});
 
-  static void _soon(BuildContext c, String f) =>
-      ScaffoldMessenger.of(c).showSnackBar(
-        SnackBar(content: Text('$f — coming soon')),
-      );
-
   @override
   Widget build(BuildContext context) {
     final items = <_Item>[
       _Item(Icons.chat_bubble_rounded, 'Chats', () => context.go('/chats')),
-      _Item(Icons.groups_rounded, 'Groups', () => _soon(context, 'Groups')),
+      _Item(Icons.groups_2_rounded, 'Townhall',
+          () => context.push('/townhall')),
       _Item(Icons.call_rounded, 'Calls', () => context.go('/calls')),
       _Item(Icons.person_add_alt_1, 'Invite', () => context.push('/invite')),
       _Item(Icons.contacts_rounded, 'Contacts',

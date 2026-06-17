@@ -15,6 +15,9 @@ import 'screens/auth/sign_in_screen.dart';
 import 'screens/chat/chat_thread_screen.dart';
 import 'screens/meeting/meeting_room_screen.dart';
 import 'screens/meeting/invite_screen.dart';
+import 'screens/meeting/townhall_entry_screen.dart';
+import 'screens/meeting/live_room_screen.dart';
+import 'services/live_api.dart';
 import 'screens/shell/app_shell.dart';
 import 'screens/tabs/calls_tab.dart';
 import 'screens/tabs/chats_tab.dart';
@@ -36,6 +39,22 @@ final _router = GoRouter(
     GoRoute(path: '/', builder: (_, __) => const _Gate()),
     GoRoute(path: '/sign-in', builder: (_, __) => const SignInScreen()),
     GoRoute(path: '/invite', builder: (_, __) => const InviteScreen()),
+    // Multi-party conference / townhall (LiveKit SFU) — entry + room.
+    GoRoute(
+        path: '/townhall', builder: (_, __) => const TownhallEntryScreen()),
+    GoRoute(
+      path: '/live',
+      builder: (ctx, st) {
+        final code = st.uri.queryParameters['code'] ?? '';
+        final asHost = st.uri.queryParameters['host'] == 'true';
+        final roleWire = st.uri.queryParameters['role'] ?? 'speaker';
+        final role = LiveRole.values.firstWhere(
+          (r) => r.wire == roleWire,
+          orElse: () => LiveRole.speaker,
+        );
+        return LiveRoomScreen(code: code, asHost: asHost, role: role);
+      },
+    ),
     GoRoute(
       path: '/room',
       builder: (ctx, st) {
