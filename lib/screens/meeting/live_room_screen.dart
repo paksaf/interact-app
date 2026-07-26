@@ -17,6 +17,8 @@ import 'package:go_router/go_router.dart';
 import 'package:livekit_client/livekit_client.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import '../../l10n/app_localizations.dart';
+import '../../services/camera_effects.dart';
 import '../../services/live_api.dart';
 import '../../services/livekit_service.dart';
 
@@ -156,6 +158,7 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
                       child: stage != null ? _pinnedLayout(stage) : _grid()),
                   _topBar(),
                   if (_showRoster) _rosterPanel(),
+                  if (_ctrl.captionText.isNotEmpty) _captionOverlay(),
                   _controlBar(),
                 ],
               );
@@ -169,6 +172,71 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
   // Cap the on-screen tiles so a 50-person townhall stays legible; the
   // overflow surfaces as a "+N" cell (full list is in the roster panel).
   static const int _maxCells = 12;
+
+  // ── Live captions overlay (fed by the caption-agent) ───────────────
+  Widget _captionOverlay() {
+    final speaker = _ctrl.captionSpeaker;
+    final text = _ctrl.captionText;
+    final isFinal = _ctrl.captionIsFinal;
+    return Positioned(
+      left: 16,
+      right: 16,
+      bottom: 104,
+      child: IgnorePointer(
+        child: Center(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: isFinal ? 0.75 : 0.55),
+              borderRadius: BorderRadius.circular(12),
+              border: isFinal
+                  ? null
+                  : Border.all(color: Colors.white24, width: 1),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (speaker.isNotEmpty)
+                  Text(
+                    speaker,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.75),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.3,
+                    ),
+                  ),
+                Text(
+                  text,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: isFinal ? 1 : 0.85),
+                    fontSize: 16,
+                    height: 1.3,
+                    fontStyle: isFinal ? FontStyle.normal : FontStyle.italic,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Toggle captions: flip local state + tell the backend to start/stop the agent.
+  Future<void> _toggleCaptions() async {
+    final turnOn = !_ctrl.captionsOn;
+    _ctrl.setCaptionsOn(turnOn);
+    final okDone =
+        await ref.read(liveApiProvider).toggleCaptions(_ctrl.roomName, turnOn);
+    if (!okDone && mounted) {
+      _ctrl.setCaptionsOn(false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(AppLocalizations.of(context).captionsUnavailable)),
+      );
+    }
+  }
 
   // ── Video grid ─────────────────────────────────────────────────────
   Widget _grid() {
@@ -312,11 +380,12 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
       right: 16,
       child: Row(
         children: [
-          _chip(Icons.groups, '$count'),
+          _chip(Icons.groups, count == 1 ? 'Just you' : '$count in call'),
           const SizedBox(width: 8),
           _chip(Icons.tv, 'Room ${_ctrl.roomCode}'),
           const Spacer(),
-          if (hands > 0) _chip(Icons.front_hand, '$hands', accent: true),
+          if (hands > 0)
+            _chip(Icons.front_hand, '$hands raised', accent: true),
         ],
       ),
     );
@@ -368,6 +437,32 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
               onPressed: _ctrl.switchCamera,
             ),
             _TvControlButton(
+              icon: Icons.blur_on,
+              label: 'BG',
+              accent: ref.watch(cameraEffectProvider) != CameraEffect.none,
+              onPressed: () async {
+                await context.push('/camera-effects');
+                if (!mounted) return;
+                // Re-assert camera so peers see a fresh track after the
+                // effects picker; full segmented publish needs a native
+                // VideoProcessor (see camera_effects.dart). Blur/none still
+                // apply to the self-view preference used across the app.
+                final effect = ref.read(cameraEffectProvider);
+                if (effect != CameraEffect.none && !_ctrl.camOn) {
+                  await _ctrl.toggleCamera();
+                }
+                setState(() {});
+              },
+            ),
+            _TvControlButton(
+              icon: _ctrl.screenSharing
+                  ? Icons.stop_screen_share
+                  : Icons.screen_share,
+              label: _ctrl.screenSharing ? 'Stop share' : 'Share',
+              accent: _ctrl.screenSharing,
+              onPressed: _ctrl.toggleScreenShare,
+            ),
+            _TvControlButton(
               icon: _ctrl.handRaised ? Icons.back_hand : Icons.front_hand,
               label: _ctrl.handRaised ? 'Lower' : 'Raise hand',
               accent: _ctrl.handRaised,
@@ -378,6 +473,14 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
               icon: Icons.people,
               label: 'People',
               onPressed: () => setState(() => _showRoster = !_showRoster),
+            ),
+            _TvControlButton(
+              icon: _ctrl.captionsOn
+                  ? Icons.closed_caption
+                  : Icons.closed_caption_off,
+              label: 'Captions',
+              accent: _ctrl.captionsOn,
+              onPressed: _toggleCaptions,
             ),
             if (canModerate)
               _TvControlButton(

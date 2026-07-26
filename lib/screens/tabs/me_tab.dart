@@ -2,14 +2,22 @@
 //
 // Me — account + settings + open-source link. The "About INTERACT"
 // surface where we proudly point at the Forgejo repo + AGPLv3 license.
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/l10n/locale_prefs.dart';
+import '../../l10n/app_localizations.dart';
 import '../../services/ai_router_service.dart';
 import '../../services/ai_service.dart';
 import '../../services/auth_service.dart';
+import '../../services/chat_api.dart';
+import '../../widgets/branded_app_bar.dart';
+import '../../widgets/user_avatar.dart';
 
 class MeTab extends ConsumerStatefulWidget {
   const MeTab({super.key});
@@ -20,6 +28,8 @@ class MeTab extends ConsumerStatefulWidget {
 class _MeTabState extends ConsumerState<MeTab> {
   String? _name;
   String? _phone;
+  String? _avatarUrl;
+  bool _uploadingAvatar = false;
   bool _privateAi = false;
   OnDeviceCapability? _cap;
 
@@ -36,13 +46,41 @@ class _MeTabState extends ConsumerState<MeTab> {
     final p = await auth.phone();
     final priv = await router.isPrivateAiEnabled();
     final cap = await router.onDeviceCapability();
+    final avatar = await ref.read(chatApiProvider).getAvatar();
     if (!mounted) return;
     setState(() {
       _name = n;
       _phone = p;
+      _avatarUrl = avatar;
       _privateAi = priv;
       _cap = cap;
     });
+  }
+
+  Future<void> _pickAvatar() async {
+    if (_uploadingAvatar) return;
+    final XFile? picked = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 640,
+      imageQuality: 85,
+    );
+    if (picked == null) return;
+    setState(() => _uploadingAvatar = true);
+    try {
+      final url = await ref.read(chatApiProvider).setAvatarFromFile(File(picked.path));
+      if (!mounted) return;
+      setState(() => _avatarUrl = url);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Profile photo updated')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not update photo: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _uploadingAvatar = false);
+    }
   }
 
   Future<void> _togglePrivateAi(bool on) async {
@@ -87,12 +125,63 @@ class _MeTabState extends ConsumerState<MeTab> {
     await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
+  Future<void> _pickLanguage(BuildContext context, AppLocalizations l10n) async {
+    final current = ref.read(localeControllerProvider);
+    final choice = await showModalBottomSheet<TalkLanguageOption>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        Widget tile(TalkLanguageOption opt, String label) {
+          final selected = current == opt;
+          return ListTile(
+            title: Text(label),
+            trailing: selected ? const Icon(Icons.check) : null,
+            onTap: () => Navigator.pop(ctx, opt),
+          );
+        }
+
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(title: Text(l10n.chooseLanguage)),
+              tile(TalkLanguageOption.system, l10n.languageSystem),
+              tile(TalkLanguageOption.english, l10n.languageEnglish),
+              tile(TalkLanguageOption.urdu, l10n.languageUrdu),
+              tile(TalkLanguageOption.arabic, l10n.languageArabic),
+              tile(TalkLanguageOption.turkish, l10n.languageTurkish),
+              tile(TalkLanguageOption.russian, l10n.languageRussian),
+              tile(TalkLanguageOption.punjabi, l10n.languagePunjabi),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: Text(
+                  l10n.rtlHint,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(ctx).colorScheme.outline,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (choice == null) return;
+    await ref.read(localeControllerProvider.notifier).setOption(choice);
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final l10n = AppLocalizations.of(context);
     return Scaffold(
       backgroundColor: Colors.transparent,
-      appBar: AppBar(title: const Text('Me')),
+      appBar: BrandedAppBar(
+        title: l10n.tabMe,
+        subtitle: 'Account & settings',
+        showBrandGlyph: true,
+      ),
       body: ListView(
         children: [
           // Profile card
@@ -105,15 +194,33 @@ class _MeTabState extends ConsumerState<MeTab> {
             ),
             child: Row(
               children: [
-                CircleAvatar(
-                  radius: 32,
-                  backgroundColor: cs.primary,
-                  child: Text(
-                    (_name ?? '?').isEmpty ? '?' : _name![0].toUpperCase(),
-                    style: TextStyle(
-                        fontSize: 28,
-                        color: cs.onPrimary,
-                        fontWeight: FontWeight.w700),
+                GestureDetector(
+                  onTap: _pickAvatar,
+                  child: Stack(
+                    children: [
+                      UserAvatar(url: _avatarUrl, name: _name ?? '', radius: 32),
+                      Positioned(
+                        right: 0,
+                        bottom: 0,
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: cs.secondary,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: cs.primaryContainer, width: 2),
+                          ),
+                          child: _uploadingAvatar
+                              ? const SizedBox(
+                                  width: 12,
+                                  height: 12,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2, color: Colors.white),
+                                )
+                              : const Icon(Icons.camera_alt,
+                                  size: 12, color: Colors.white),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 const SizedBox(width: 16),
@@ -148,25 +255,84 @@ class _MeTabState extends ConsumerState<MeTab> {
             _Tile(
               icon: Icons.wifi_off,
               label: 'Offline LAN mode',
-              subtitle: 'Phase 1.5 — Bonsoir mDNS + WebRTC direct',
-              onTap: () {},
+              subtitle: 'Bonsoir mDNS + TCP text on same Wi‑Fi',
+              onTap: () => context.push('/offline-lan'),
+            ),
+            _Tile(
+              icon: Icons.bluetooth_searching,
+              label: 'Nearby mesh (BLE)',
+              subtitle: 'sahl_mesh gossip — short texts, no internet',
+              onTap: () => context.push('/nearby-mesh'),
+            ),
+            _Tile(
+              icon: Icons.alternate_email,
+              label: 'Set your @username',
+              subtitle: 'Let people find you without your number',
+              onTap: () async {
+                final ctrl = TextEditingController();
+                final v = await showDialog<String>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('Set @username'),
+                    content: TextField(
+                      controller: ctrl,
+                      autofocus: true,
+                      decoration: const InputDecoration(prefixText: '@', hintText: 'yourname'),
+                    ),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+                      FilledButton(
+                        onPressed: () => Navigator.pop(ctx, ctrl.text.trim().toLowerCase()),
+                        child: const Text('Save'),
+                      ),
+                    ],
+                  ),
+                );
+                if (v == null || v.isEmpty || !context.mounted) return;
+                try {
+                  final okUp = await ref.read(chatApiProvider).setUsername(v);
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(okUp ? 'Handle set: @$v' : 'That handle is already taken')),
+                  );
+                } catch (e) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not set handle: $e')));
+                  }
+                }
+              },
             ),
           ]),
-          _Section(title: 'Voice & AI', children: [
+          _Section(title: l10n.sectionChats, children: [
+            _Tile(
+              icon: Icons.groups_2_outlined,
+              label: l10n.communities,
+              subtitle: l10n.communitiesSubtitle,
+              onTap: () => context.push('/communities'),
+            ),
+            _Tile(
+              icon: Icons.cloud_sync_outlined,
+              label: l10n.backupRestore,
+              subtitle: l10n.backupSubtitle,
+              onTap: () => context.push('/backup'),
+            ),
+          ]),
+          _Section(title: l10n.sectionVoiceAi, children: [
             SwitchListTile(
               secondary: const Icon(Icons.privacy_tip_outlined),
-              title: const Text('Private AI'),
+              title: Text(l10n.privateAiComingSoon),
               subtitle: Text(
                 _privateAi
-                    ? 'On — chat & voice run on-device only. No cloud round-trips.'
-                    : 'Off — chat tier uses cloud (DeepSeek/Zeka). Voice stays on-device.',
+                    ? l10n.privateAiOnSubtitle
+                    : l10n.privateAiOffSubtitle,
               ),
               value: _privateAi,
+              // Keep toggle for prefs, but warn loudly — model is not ready.
               onChanged: _togglePrivateAi,
             ),
             _Tile(
               icon: Icons.memory,
-              label: 'On-device capability',
+              label: l10n.onDeviceCapability,
               subtitle: _cap == null
                   ? 'Checking…'
                   : _capSummary(_cap!),
@@ -180,15 +346,15 @@ class _MeTabState extends ConsumerState<MeTab> {
             ),
             _Tile(
               icon: Icons.mic,
-              label: 'Voice transcription (Urdu)',
-              subtitle: 'On-device Whisper, downloads on first use',
+              label: l10n.voiceNoteTranscription,
+              subtitle: l10n.voiceNoteTranscriptionSubtitle,
               onTap: () {},
             ),
             _Tile(
               icon: Icons.translate,
-              label: 'Languages',
-              subtitle: 'EN · UR · PA · SD · PS · BAL',
-              onTap: () {},
+              label: l10n.languages,
+              subtitle: l10n.languagesSubtitle,
+              onTap: () => _pickLanguage(context, l10n),
             ),
           ]),
           _Section(title: 'About', children: [

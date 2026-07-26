@@ -1,26 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0
 //
-// LAN service — Bonsoir mDNS discovery + broadcast for INTERACT's
-// offline mode. Phase 1.5 (this file) ships the service-discovery
-// layer. Phase 1.5 round 2 (next session) wires WebRTC direct
-// peer-to-peer on top so calls/messages work with NO internet.
-//
-// Why this matters: no major competitor (WhatsApp / Zoom / Signal /
-// Viber) does this. Briar and Jami do but lack Urdu STT and modern
-// mobile UX. This is INTERACT's #1 differentiator per the
-// research-backed PRD.
-//
-// Service type: `_interact-lan._tcp` (matches the PRD)
-// TXT attributes: peerId + displayName so discovery surfaces enough
-// info to render a contact tile before any TCP handshake happens.
+// LAN service — Bonsoir mDNS discovery + TCP text transport for INTERACT
+// offline mode (Phase 1.5 → 2). Peers on the same Wi‑Fi exchange newline-
+// delimited UTF-8 chat without internet. WebRTC 1:1 still uses the cloud
+// signal path; LAN text is the offline differentiator that needs no TURN.
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:bonsoir/bonsoir.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 const _kServiceType = '_interact-lan._tcp';
-const _kPortPlaceholder = 0; // Bonsoir picks a free port at advertise time
 
 final lanServiceProvider = Provider<LanService>((ref) => LanService());
 
@@ -43,29 +35,56 @@ class LanPeer {
   int get hashCode => peerId.hashCode;
 }
 
+class LanTextMessage {
+  LanTextMessage({
+    required this.fromPeerId,
+    required this.fromName,
+    required this.body,
+    required this.at,
+    this.isMine = false,
+  });
+  final String fromPeerId;
+  final String fromName;
+  final String body;
+  final DateTime at;
+  final bool isMine;
+}
+
 class LanService {
   BonsoirBroadcast? _broadcast;
   BonsoirDiscovery? _discovery;
+  ServerSocket? _server;
   final _peersController = StreamController<List<LanPeer>>.broadcast();
+  final _messagesController = StreamController<LanTextMessage>.broadcast();
   final Map<String, LanPeer> _peers = {};
+  String _peerId = '';
+  String _displayName = '';
 
   Stream<List<LanPeer>> get peersStream => _peersController.stream;
+  Stream<LanTextMessage> get messages => _messagesController.stream;
   List<LanPeer> get peers => _peers.values.toList();
 
-  bool get isBroadcasting => _broadcast?.isReady ?? false;
-  bool get isDiscovering => _discovery?.isReady ?? false;
+  bool get isRunning => _server != null;
 
-  /// Start broadcasting our presence AND discovering peers.
-  /// Idempotent — safe to call repeatedly.
+  /// Start TCP listener + mDNS advertise/discover. Idempotent.
   Future<void> start({
     required String peerId,
     required String displayName,
   }) async {
+    _peerId = peerId;
+    _displayName = displayName;
+
+    if (_server == null) {
+      _server = await ServerSocket.bind(InternetAddress.anyIPv4, 0);
+      _server!.listen(_onInboundSocket);
+    }
+    final port = _server!.port;
+
     if (_broadcast == null) {
       final service = BonsoirService(
         name: 'INTERACT-${peerId.substring(0, peerId.length.clamp(0, 8))}',
         type: _kServiceType,
-        port: _kPortPlaceholder,
+        port: port,
         attributes: {
           'peerId': peerId,
           'displayName': displayName,
@@ -88,30 +107,78 @@ class LanService {
   Future<void> stop() async {
     await _broadcast?.stop();
     await _discovery?.stop();
+    await _server?.close();
     _broadcast = null;
     _discovery = null;
+    _server = null;
     _peers.clear();
     _peersController.add(const []);
+  }
+
+  /// Send a short UTF-8 text line to [peer] over TCP.
+  Future<void> sendText(LanPeer peer, String text) async {
+    final body = text.trim();
+    if (body.isEmpty) return;
+    final payload = jsonEncode({
+      't': 'chat',
+      'from': _peerId,
+      'name': _displayName,
+      'body': body,
+      'at': DateTime.now().toIso8601String(),
+    });
+    Socket? sock;
+    try {
+      sock = await Socket.connect(peer.host, peer.port,
+          timeout: const Duration(seconds: 4));
+      sock.write('$payload\n');
+      await sock.flush();
+      _messagesController.add(LanTextMessage(
+        fromPeerId: _peerId,
+        fromName: _displayName,
+        body: body,
+        at: DateTime.now(),
+        isMine: true,
+      ));
+    } finally {
+      await sock?.close();
+    }
+  }
+
+  void _onInboundSocket(Socket sock) {
+    utf8.decoder.bind(sock).transform(const LineSplitter()).listen((line) {
+      if (line.trim().isEmpty) return;
+      try {
+        final m = jsonDecode(line) as Map<String, dynamic>;
+        if (m['t'] != 'chat') return;
+        final from = (m['from'] as String?) ?? '';
+        if (from.isEmpty || from == _peerId) return;
+        _messagesController.add(LanTextMessage(
+          fromPeerId: from,
+          fromName: (m['name'] as String?) ?? from,
+          body: (m['body'] as String?) ?? '',
+          at: DateTime.tryParse(m['at'] as String? ?? '') ?? DateTime.now(),
+        ));
+      } catch (_) {/* ignore malformed */}
+    });
   }
 
   void _onDiscoveryEvent(BonsoirDiscoveryEvent event) {
     final s = event.service;
     if (s == null) return;
     if (event.type == BonsoirDiscoveryEventType.discoveryServiceFound) {
-      // Need attributes — fire resolution
       s.resolve(_discovery!.serviceResolver);
     } else if (event.type ==
         BonsoirDiscoveryEventType.discoveryServiceResolved) {
       final attrs = s.attributes;
       final peerId = attrs['peerId'];
-      if (peerId == null || peerId.isEmpty) return;
+      if (peerId == null || peerId.isEmpty || peerId == _peerId) return;
       final host = (s as ResolvedBonsoirService).host ?? '';
-      final port = s.port;
+      if (host.isEmpty) return;
       _peers[peerId] = LanPeer(
         peerId: peerId,
         displayName: attrs['displayName'] ?? peerId,
         host: host,
-        port: port,
+        port: s.port,
       );
       _peersController.add(_peers.values.toList());
     } else if (event.type == BonsoirDiscoveryEventType.discoveryServiceLost) {
@@ -123,8 +190,8 @@ class LanService {
   }
 
   void dispose() {
-    _broadcast?.stop();
-    _discovery?.stop();
+    stop();
     _peersController.close();
+    _messagesController.close();
   }
 }

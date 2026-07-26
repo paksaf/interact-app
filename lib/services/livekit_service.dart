@@ -71,6 +71,12 @@ class LiveRoomController extends ChangeNotifier {
   String _role = 'speaker';
   String _roomCode = '';
 
+  // Live captions (fed by the caption-agent over the "captions" data topic).
+  String _captionSpeaker = '';
+  String _captionText = '';
+  bool _captionIsFinal = true;
+  bool _captionsOn = false;
+
   /// Identities of remote participants whose hand is currently raised.
   final Set<String> _remoteHands = <String>{};
 
@@ -88,6 +94,24 @@ class LiveRoomController extends ChangeNotifier {
   bool get isHost => _isHost;
   String get role => _role;
   String get roomCode => _roomCode;
+
+  /// The LiveKit room name (for the captions toggle payload). Falls back to code.
+  String get roomName => _room?.name ?? _roomCode;
+  bool get captionsOn => _captionsOn;
+  String get captionSpeaker => _captionSpeaker;
+  String get captionText => _captionText;
+  /// False while the agent is still streaming an interim line.
+  bool get captionIsFinal => _captionIsFinal;
+  /// Reflect the toggle locally; clears the line when turning off.
+  void setCaptionsOn(bool on) {
+    _captionsOn = on;
+    if (!on) {
+      _captionSpeaker = '';
+      _captionText = '';
+      _captionIsFinal = true;
+    }
+    notifyListeners();
+  }
   int get raisedHandCount =>
       _remoteHands.length + (_handRaised ? 1 : 0);
 
@@ -220,6 +244,28 @@ class LiveRoomController extends ChangeNotifier {
     notifyListeners();
   }
 
+  bool _screenSharing = false;
+  bool get screenSharing => _screenSharing;
+
+  /// Publish / stop local screen share (Android MediaProjection / iOS ReplayKit).
+  Future<void> toggleScreenShare() async {
+    final lp = _room?.localParticipant;
+    if (lp == null) return;
+    final next = !_screenSharing;
+    try {
+      await lp.setScreenShareEnabled(next);
+      _screenSharing = next;
+      // Camera often conflicts with share on phones — prefer share when on.
+      if (next && _camOn) {
+        await lp.setCameraEnabled(false);
+        _camOn = false;
+      }
+    } catch (e) {
+      _error = 'Screen share failed: $e';
+    }
+    notifyListeners();
+  }
+
   Future<void> switchCamera() async {
     final track = _localVideoTrack();
     if (track == null) return;
@@ -284,6 +330,19 @@ class LiveRoomController extends ChangeNotifier {
     try {
       m = Map<String, dynamic>.from(jsonDecode(utf8.decode(event.data)) as Map);
     } catch (_) {
+      return;
+    }
+    // Live captions from the caption-agent (topic "captions"):
+    // { participant, text, final }. Interim lines update in place; final commits.
+    if (event.topic == 'captions') {
+      _captionSpeaker = (m['participant'] as String?) ??
+          (m['speaker'] as String?) ??
+          '';
+      _captionText = (m['text'] as String?) ?? '';
+      final fin = m['final'];
+      _captionIsFinal = fin == true || fin == 'true' || fin == 1;
+      _captionsOn = true;
+      notifyListeners();
       return;
     }
     switch (m['t']) {

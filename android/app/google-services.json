@@ -1,0 +1,84 @@
+{
+  "project_info": {
+    "project_number": "1023547698227",
+    "project_id": "interact-lifestyle",
+    "storage_bucket": "interact-lifestyle.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1023547698227:android:96d08c32d41045fbde0746",
+        "android_client_info": {
+          "package_name": "com.interact.maps"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1023547698227-3t3l4gquqrtoj1ivimecrkj6f8nkjtvq.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.interact.maps",
+            "certificate_hash": "0d2815af2958041de66fde077e4ab10b521130e8"
+          }
+        },
+        {
+          "client_id": "1023547698227-h2dm9ss89c1qeq9vjlutkoak5k6165v7.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.interact.maps",
+            "certificate_hash": "5153eab8e642c1e9c393399be67d1506a10599b6"
+          }
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDo1iS76TCE-ZtVa7Jevxjo8z62wgNxJns"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1023547698227:android:54539b84672f79f1de0746",
+        "android_client_info": {
+          "package_name": "com.interactpak.interact_talk"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDo1iS76TCE-ZtVa7Jevxjo8z62wgNxJns"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1023547698227:android:fa1c337e0e9a4b58de0746",
+        "android_client_info": {
+          "package_name": "com.interactpak.lifestyle"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDo1iS76TCE-ZtVa7Jevxjo8z62wgNxJns"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

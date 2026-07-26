@@ -1,7 +1,7 @@
 name: interact
 description: "INTERACT — voice/video-first, offline-capable, AI-assisted communication super-app. Free, open-source (AGPLv3), Pakistan-first."
 publish_to: "none"
-version: 0.1.0+1
+version: 0.5.1+19
 
 environment:
   sdk: ^3.5.0
@@ -10,7 +10,15 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  intl: any
   cupertino_icons: ^1.0.6
+
+  # ── Push (FCM) — background/killed call ring. Reuses the interact-lifestyle
+  #    Firebase project; needs android/app/google-services.json to build. ──
+  firebase_core: ^3.6.0
+  firebase_messaging: ^15.1.3
 
   # ── State + nav ─────────────────────────────────────────────────────
   flutter_riverpod: ^2.5.1
@@ -69,8 +77,70 @@ dependencies:
   # Added 2026-05-23 (#163).
   share_plus: ^10.0.0
 
+  # ── Ringtone for incoming calls (FaceTime-style) ────────────────────
+  # Plays the device's default ringtone on a loop while the incoming-call
+  # screen is up — no bundled audio asset needed. Used by call_signaling.dart
+  # + incoming_call_screen.dart.
+  flutter_ringtone_player: ^4.0.0+3
+
+  # ── Local notifications (message banner + sound) ───────────────────
+  # New-message notifications while the app runs: a high-importance channel
+  # shows a heads-up banner AND plays the system notification sound (no extra
+  # audio asset needed). message_watcher.dart polls threads and fires these
+  # for inbound messages outside the open chat. Background/killed-app push is
+  # a later FCM add — this covers foreground/recent-background today.
+  flutter_local_notifications: ^17.2.3
+
   # ── AI audit log — SHA-256 hashes of prompts/responses ─────────────
   crypto: ^3.0.3
+
+  # ── Encrypted chat backup (#115) ────────────────────────────────────
+  # Pure-Dart PBKDF2-HMAC-SHA256 (passphrase → key) + AES-GCM (auth-
+  # encrypt the exported chat bundle). `crypto` above only hashes; this
+  # adds symmetric encryption. Backup blob is uploaded to the VPS
+  # (qurbanisahulat /api/v1/talk/backup) as opaque base64 — the server
+  # never sees the passphrase or plaintext. See backup_service.dart.
+  cryptography: ^2.7.0
+
+  # ── VPS auto-update (side-load channel) ─────────────────────────────
+  # update_service.dart checks downloads.interactpak.com/interact/latest.json,
+  # compares versionCode (package_info_plus), and on a newer build opens the
+  # APK URL via url_launcher (already a dep) so the browser downloads it + the
+  # OS installer runs (REQUEST_INSTALL_PACKAGES). NOT ota_update — it pins a low
+  # compileSdk that breaks Android resource linking.
+  package_info_plus: ^8.0.0
+
+  # ── Location personalisation ────────────────────────────────────────
+  # Coarse GPS → nearest-city label ("Good evening · Multan"). Pinned to the
+  # same major interact-maps uses (12.x) to stay lockstep across the fleet's
+  # Flutter toolchain. Reverse-geocode is OFFLINE (embedded gazetteer in
+  # location_service.dart) — no `geocoding` platform dependency. The fix never
+  # leaves the device.
+  geolocator: ^12.0.0
+
+  # ── Device contacts (invite-from-address-book) ──────────────────────
+  # Lets the user pick someone from their phone's address book to start a
+  # chat or invite. Read-only usage (fetch with phones); we never write or
+  # upload the address book — the chosen number goes straight to
+  # createDirectThread / InviteSheet, same as the manual-entry path.
+  flutter_contacts: ^1.1.9+2
+
+  # ── Camera effects / virtual background (Zoom/Meet-style) ───────────
+  # Pinned to the same majors interact-maps ships (READ-only donor whose
+  # camera→InputImage pipeline we borrow). `camera` drives the preview +
+  # image stream; `google_mlkit_selfie_segmentation` produces the person mask
+  # we composite over a blur/brand background. maps uses face_detection; we
+  # swap the detector for the selfie segmenter — same CameraImage→InputImage
+  # conversion (_toInputImage), so the known-good integration carries over.
+  camera: ^0.11.2
+  google_mlkit_selfie_segmentation: ^0.9.0
+
+  # ── Chat media attachments (#114) ───────────────────────────────────
+  # Pick photos/videos (image_picker) and any file incl. audio/docs
+  # (file_picker), 50 MB client-side guard, upload to qurbanisahulat
+  # /api/v1/media/upload, send the returned URL as the message attachment.
+  image_picker: ^1.1.2
+  file_picker: ^8.1.2
 
   # ── Offline LAN discovery (Phase 1.5) ───────────────────────────────
   # Bonsoir mDNS broadcast/discover. Combined with flutter_webrtc, this
@@ -85,6 +155,12 @@ dependencies:
   # TtsService, LanguageController).
   sahulat_common:
     path: ../sahulat_common
+
+  # ── Offline BLE mesh (SAHL donor) ───────────────────────────────────
+  # Gossip text without internet. BleTransport is imported via
+  # package:sahl_mesh/sahl_mesh_ble.dart (Flutter-only barrel).
+  sahl_mesh:
+    path: ../sahl_mesh
 
 # `record` 5.x pulls record_linux 0.7.2 which is missing the
 # `startStream` + new `hasPermission` signature added by the
@@ -102,13 +178,14 @@ dev_dependencies:
   flutter_native_splash: ^2.4.7
 
 flutter:
+  generate: true
   uses-material-design: true
   assets:
     - assets/icons/
     - assets/backgrounds/
 
 flutter_launcher_icons:
-  android: launcher_icon
+  android: true          # overwrite the default ic_launcher mipmaps (AndroidManifest uses @mipmap/ic_launcher)
   ios: true
   image_path: "assets/icons/interact_icon.png"
   min_sdk_android: 23

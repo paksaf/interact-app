@@ -153,6 +153,22 @@ class ChatThread {
 
 enum MessageKind { text, voice, image, file, system }
 
+/// A single emoji reaction bucket on a message (P1 overlay). `mine` marks
+/// whether the current user is one of the `count` reactors — drives the
+/// toggle + the highlighted chip.
+class MessageReaction {
+  const MessageReaction({required this.emoji, required this.count, required this.mine});
+  final String emoji;
+  final int count;
+  final bool mine;
+
+  factory MessageReaction.fromJson(Map<String, dynamic> j) => MessageReaction(
+        emoji: (j['emoji'] as String?) ?? '',
+        count: (j['count'] as num?)?.toInt() ?? 0,
+        mine: (j['mine'] as bool?) ?? false,
+      );
+}
+
 class Message {
   Message({
     required this.id,
@@ -168,6 +184,12 @@ class Message {
     this.deliveredAt,
     this.readAt,
     this.isMine = false,
+    this.reactions = const [],
+    this.edited = false,
+    this.deleted = false,
+    this.pinnedAt,
+    this.replyToId,
+    this.pending = false,
   });
 
   final String id;
@@ -183,6 +205,16 @@ class Message {
   final DateTime? deliveredAt;
   final DateTime? readAt;
   final bool isMine;
+  // P1 overlay (reactions/edit/delete/pin/reply) — served merged into GET.
+  final List<MessageReaction> reactions;
+  final bool edited;
+  final bool deleted;
+  final DateTime? pinnedAt;
+  final String? replyToId;
+  /// True when queued in the local outbox (offline store-and-forward).
+  final bool pending;
+
+  bool get isPinned => pinnedAt != null;
 
   factory Message.fromJson(Map<String, dynamic> j, {String? myId}) {
     final senderId = (j['senderId'] as String?) ?? '';
@@ -207,6 +239,14 @@ class Message {
       deliveredAt: DateTime.tryParse(j['deliveredAt'] as String? ?? ''),
       readAt: DateTime.tryParse(j['readAt'] as String? ?? ''),
       isMine: myId != null && senderId == myId,
+      reactions: ((j['reactions'] as List?) ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(MessageReaction.fromJson)
+          .toList(),
+      edited: (j['edited'] as bool?) ?? false,
+      deleted: (j['deleted'] as bool?) ?? false,
+      pinnedAt: DateTime.tryParse(j['pinnedAt'] as String? ?? ''),
+      replyToId: j['replyToId'] as String?,
     );
   }
 

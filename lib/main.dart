@@ -7,14 +7,25 @@
 // modality for the target audience). Chats sit secondary. Contacts + Me
 // round out the bottom nav.
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'core/l10n/locale_prefs.dart';
+import 'l10n/app_localizations.dart';
 import 'models/chat.dart';
 import 'screens/auth/sign_in_screen.dart';
+import 'screens/camera/camera_effects_screen.dart';
+import 'screens/contacts/device_contacts_screen.dart';
+import 'screens/me/backup_screen.dart';
 import 'screens/chat/chat_thread_screen.dart';
+import 'screens/chat/communities_screen.dart';
+import 'screens/chat/new_group_screen.dart';
 import 'screens/meeting/meeting_room_screen.dart';
+import 'screens/meeting/incoming_call_screen.dart';
 import 'screens/meeting/invite_screen.dart';
+import 'services/call_signaling.dart';
 import 'screens/meeting/townhall_entry_screen.dart';
 import 'screens/meeting/live_room_screen.dart';
 import 'services/live_api.dart';
@@ -24,9 +35,18 @@ import 'screens/tabs/chats_tab.dart';
 import 'screens/tabs/contacts_tab.dart';
 import 'screens/tabs/me_tab.dart';
 import 'screens/tabs/menu_tab.dart';
+import 'screens/lan/offline_lan_screen.dart';
+import 'screens/mesh/nearby_mesh_screen.dart';
 import 'services/auth_service.dart';
+import 'services/push_service.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // FCM for background/killed call ring. Fail-soft: if google-services.json /
+  // Firebase isn't configured yet, the app still runs (ring stays foreground-only).
+  try {
+    await Firebase.initializeApp();
+  } catch (_) {/* Firebase not configured — degrade gracefully */}
   runApp(const ProviderScope(child: InteractApp()));
 }
 
@@ -38,6 +58,30 @@ final _router = GoRouter(
   routes: [
     GoRoute(path: '/', builder: (_, __) => const _Gate()),
     GoRoute(path: '/sign-in', builder: (_, __) => const SignInScreen()),
+    GoRoute(
+        path: '/camera-effects',
+        builder: (_, __) => const CameraEffectsScreen()),
+    GoRoute(
+        path: '/offline-lan',
+        builder: (_, __) => const OfflineLanScreen()),
+    GoRoute(
+        path: '/nearby-mesh',
+        builder: (_, __) => const NearbyMeshScreen()),
+    GoRoute(
+        path: '/device-contacts',
+        builder: (_, __) => const DeviceContactsScreen()),
+    GoRoute(path: '/backup', builder: (_, __) => const BackupScreen()),
+    GoRoute(path: '/new-group', builder: (_, __) => const NewGroupScreen()),
+    GoRoute(
+      path: '/incoming',
+      builder: (ctx, st) {
+        final call = st.extra as IncomingCall?;
+        if (call == null) {
+          return const Scaffold(body: Center(child: Text('Call ended')));
+        }
+        return IncomingCallScreen(call: call);
+      },
+    ),
     GoRoute(path: '/invite', builder: (_, __) => const InviteScreen()),
     // Multi-party conference / townhall (LiveKit SFU) — entry + room.
     GoRoute(
@@ -84,6 +128,10 @@ final _router = GoRouter(
         return ChatThreadScreen(thread: thread);
       },
     ),
+    GoRoute(
+      path: '/communities',
+      builder: (ctx, st) => const CommunitiesScreen(),
+    ),
     ShellRoute(
       builder: (ctx, st, child) => AppShell(child: child),
       routes: [
@@ -97,29 +145,57 @@ final _router = GoRouter(
   ],
 );
 
-class InteractApp extends StatelessWidget {
+class InteractApp extends ConsumerWidget {
   const InteractApp({super.key});
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    ref.watch(localeControllerProvider);
+    final override = ref.read(localeControllerProvider.notifier).localeOverride;
+
     return MaterialApp.router(
       title: 'INTERACT',
       debugShowCheckedModeBanner: false,
+      locale: override,
+      supportedLocales: kTalkSupportedLocales,
+      localizationsDelegates: const [
+        AppLocalizations.delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF06B6D4), // INTERACT cyan
+          seedColor: const Color(0xFF0D4A5C), // INTERACT teal-navy (matches app icon)
           brightness: Brightness.light,
+        ).copyWith(
+          secondary: const Color(0xFFBE9A5F), // gold accent
+          tertiary: const Color(0xFFBE9A5F),
         ),
         useMaterial3: true,
       ),
       darkTheme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF06B6D4),
+          seedColor: const Color(0xFF0D4A5C),
           brightness: Brightness.dark,
+        ).copyWith(
+          secondary: const Color(0xFFBE9A5F),
+          tertiary: const Color(0xFFBE9A5F),
         ),
         useMaterial3: true,
       ),
       themeMode: ThemeMode.system,
       routerConfig: _router,
+      builder: (context, child) {
+        final inner = child ?? const SizedBox.shrink();
+        final code = Localizations.localeOf(context).languageCode;
+        if (LocalePrefs.isRtlLanguageCode(code)) {
+          return Directionality(
+            textDirection: TextDirection.rtl,
+            child: inner,
+          );
+        }
+        return inner;
+      },
     );
   }
 }
@@ -141,12 +217,26 @@ class _GateState extends ConsumerState<_Gate> {
       final auth = ref.read(authServiceProvider);
       final signedIn = await auth.hasValidToken();
       if (!mounted) return;
+      if (signedIn) {
+        // Register for FCM call-ring push (fail-soft; no-op if unconfigured).
+        PushService.instance.init(auth).catchError((_) {});
+      }
       context.go(signedIn ? '/calls' : '/sign-in');
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    // Brand-colored gate (teal, matches the native splash + launcher icon) so
+    // the cold-start transition native-splash → gate → /calls has NO white
+    // flash/jerk. A bare white Scaffold here caused the "sudden splash" blink.
+    return const Scaffold(
+      backgroundColor: Color(0xFF0D4A5C),
+      body: Center(
+        child: CircularProgressIndicator(
+          valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFBE9A5F)),
+        ),
+      ),
+    );
   }
 }
