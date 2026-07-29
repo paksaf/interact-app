@@ -16,6 +16,7 @@ import 'core/l10n/locale_prefs.dart';
 import 'l10n/app_localizations.dart';
 import 'models/chat.dart';
 import 'screens/auth/sign_in_screen.dart';
+import 'screens/auth/profile_setup_screen.dart';
 import 'screens/camera/camera_effects_screen.dart';
 import 'screens/contacts/device_contacts_screen.dart';
 import 'screens/me/backup_screen.dart';
@@ -57,7 +58,17 @@ final _router = GoRouter(
   initialLocation: '/',
   routes: [
     GoRoute(path: '/', builder: (_, __) => const _Gate()),
-    GoRoute(path: '/sign-in', builder: (_, __) => const SignInScreen()),
+    GoRoute(
+      path: '/sign-in',
+      builder: (ctx, st) => SignInScreen(
+        sessionExpired: st.uri.queryParameters['expired'] == '1',
+        prefillPhone: st.uri.queryParameters['phone'],
+      ),
+    ),
+    GoRoute(
+      path: '/profile-setup',
+      builder: (_, __) => const ProfileSetupScreen(),
+    ),
     GoRoute(
         path: '/camera-effects',
         builder: (_, __) => const CameraEffectsScreen()),
@@ -220,8 +231,20 @@ class _GateState extends ConsumerState<_Gate> {
       if (signedIn) {
         // Register for FCM call-ring push (fail-soft; no-op if unconfigured).
         PushService.instance.init(auth).catchError((_) {});
+        context.go('/calls');
+        return;
       }
-      context.go(signedIn ? '/calls' : '/sign-in');
+      final expired = await auth.hasExpiredToken();
+      final phone = await auth.phone();
+      if (!mounted) return;
+      final q = <String, String>{
+        if (expired) 'expired': '1',
+        if (phone != null && phone.isNotEmpty) 'phone': phone,
+      };
+      final qs = q.isEmpty
+          ? ''
+          : '?${q.entries.map((e) => '${e.key}=${Uri.encodeComponent(e.value)}').join('&')}';
+      context.go('/sign-in$qs');
     });
   }
 

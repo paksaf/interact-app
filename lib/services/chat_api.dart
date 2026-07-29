@@ -18,6 +18,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 
@@ -395,6 +396,22 @@ class ChatApi {
     return (thread: thread, messages: messages);
   }
 
+  /// Set disappearing-message timer for a thread (0 = off).
+  /// Allowed: 0, 3600, 86400, 604800.
+  Future<int?> setDisappearing(String threadId, int seconds) async {
+    final res = await http.patch(
+      Uri.parse('$_kBase/api/v1/talk/threads/$threadId/disappearing'),
+      headers: await _headers(),
+      body: jsonEncode({'seconds': seconds}),
+    );
+    if (res.statusCode >= 400) {
+      throw Exception('Disappearing timer failed: ${res.statusCode}');
+    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = body['data'] as Map<String, dynamic>? ?? body;
+    return (data['disappearingSeconds'] as num?)?.toInt();
+  }
+
   /// Send a text message. Pass [replyToId] (a hub message id) to quote/reply.
   /// On network failure the payload is queued in [OutboxService] and a local
   /// pending [Message] is returned so the bubble can show a clock icon.
@@ -459,6 +476,7 @@ class ChatApi {
     if (t != null) req.headers['Authorization'] = 'Bearer $t';
     req.files.add(await http.MultipartFile.fromPath('file', file.path));
     final res = await http.Response.fromStream(await req.send());
+    debugPrint('[attach] uploadMedia → ${res.statusCode}');
     if (res.statusCode >= 400) {
       throw Exception('upload failed: ${res.statusCode} ${res.body}');
     }
@@ -479,7 +497,8 @@ class ChatApi {
     required String url,
     String caption = '',
   }) async {
-    return _send(threadId, body: {'body': caption, 'attachment': url});
+    return _send(threadId,
+        body: {'body': caption, 'attachment': url}, logTag: 'sendAttachment');
   }
 
   /// Mark a thread read up to a given message.
@@ -498,6 +517,7 @@ class ChatApi {
   Future<Message> _send(
     String threadId, {
     required Map<String, dynamic> body,
+    String? logTag,
   }) async {
     final url = '$_kBase/api/v1/chat/threads/$threadId/messages';
     final headers = await _headers();
@@ -510,6 +530,7 @@ class ChatApi {
             body: jsonEncode(body),
           )
           .timeout(const Duration(seconds: 12));
+      if (logTag != null) debugPrint('[attach] $logTag → ${res.statusCode}');
       if (res.statusCode >= 400) {
         // Queue recoverable failures (offline / 5xx). Client 4xx stays loud.
         if (res.statusCode >= 500 || res.statusCode == 408 || res.statusCode == 429) {
@@ -657,6 +678,41 @@ class ChatApi {
       body: jsonEncode({'url': up.url}),
     );
     return up.url;
+  }
+
+  // ─── Unified profile (display name + read) ───────────────────────────
+  /// Fetch the signed-in user's profile in one round-trip.
+  Future<({String fullName, String? username, String? avatarUrl, String? phone, String? email})>
+      getProfile() async {
+    final res = await http.get(
+      Uri.parse('$_kBase/api/v1/talk/profile'),
+      headers: await _headers(),
+    );
+    if (res.statusCode >= 400) {
+      throw Exception('getProfile failed: ${res.statusCode}');
+    }
+    final data = _extractObject(jsonDecode(res.body) as Map<String, dynamic>);
+    return (
+      fullName: (data['fullName'] as String?) ?? '',
+      username: data['username'] as String?,
+      avatarUrl: data['avatarUrl'] as String?,
+      phone: data['phone'] as String?,
+      email: data['email'] as String?,
+    );
+  }
+
+  /// Update the caller's display name (1–60 chars). Returns the saved name.
+  Future<String> setDisplayName(String fullName) async {
+    final res = await http.post(
+      Uri.parse('$_kBase/api/v1/talk/profile'),
+      headers: await _headers(),
+      body: jsonEncode({'fullName': fullName.trim()}),
+    );
+    if (res.statusCode >= 400) {
+      throw Exception('setDisplayName failed: ${res.statusCode}');
+    }
+    final data = _extractObject(jsonDecode(res.body) as Map<String, dynamic>);
+    return (data['fullName'] as String?) ?? fullName.trim();
   }
 
   // ─── Groups (#132) ───────────────────────────────────────────────────

@@ -8,6 +8,9 @@
 #   bash build-and-install.sh a23         # build + install on A23 (USB)
 #   bash build-and-install.sh tv          # build + install on Bravia TV (LAN)
 #   bash build-and-install.sh all         # build + install on both
+#   bash build-and-install.sh wifi        # build a UNIVERSAL apk + serve over Wi-Fi
+#                                         #   (for phones where USB ADB won't work,
+#                                         #    e.g. MIUI). Installs on ANY ABI.
 #
 # 2026-05-21 — adds Private AI toggle + ✨ AI menu wiring. Cloud AI
 # tier routes through interactpak.com/api/zeka/ai; on-device tier
@@ -33,14 +36,52 @@ if ! flutter analyze --no-pub --no-fatal-warnings --no-fatal-infos; then
   exit 1
 fi
 
+APK_DIR="build/app/outputs/flutter-apk"
+# Version tag (e.g. 0.5.1+2027) → used to name the sideload APK so a phone
+# never installs a stale build with the same generic filename again.
+VER="$(grep -m1 '^version:' pubspec.yaml | awk '{print $2}' | tr '+' '-')"
+
+# ── Wi-Fi sideload path builds a UNIVERSAL apk (works on every ABI) ─────────
+# Do NOT sideload the stale `app-release.apk` a --split build leaves behind:
+# --split-per-abi does NOT refresh app-release.apk, so serving it installs an
+# OLD build. We build a fresh universal apk under a versioned name instead.
+if [[ "$target" == "wifi" ]]; then
+  echo ""
+  echo "==> [3/4] flutter build apk --release  (universal — all ABIs)"
+  # Clear any stale generic artefact first so nothing old can be served.
+  rm -f "$APK_DIR/app-release.apk"
+  flutter build apk --release
+  UNIVERSAL="$APK_DIR/app-release.apk"
+  [[ -f "$UNIVERSAL" ]] || { echo "❌ universal APK not found at $UNIVERSAL"; exit 1; }
+  SIDELOAD="$APK_DIR/InteractTalk-${VER}.apk"
+  cp "$UNIVERSAL" "$SIDELOAD"
+  echo "✅ universal APK: $SIDELOAD ($(du -h "$SIDELOAD" | cut -f1))"
+
+  LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}')"
+  echo ""
+  echo "==> [4/4] Serving over Wi-Fi on :8765"
+  echo "    On the phone (same Wi-Fi) open:"
+  echo "      http://${LAN_IP:-<your-mac-ip>}:8765/InteractTalk-${VER}.apk"
+  echo "    (Ctrl+C to stop the server when the download completes.)"
+  cd "$APK_DIR"
+  # Bind IPv4 explicitly (Pattern 11) — default [::] confuses some MIUI browsers.
+  exec python3 -c "
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+class H(SimpleHTTPRequestHandler):
+    extensions_map = {**getattr(SimpleHTTPRequestHandler, 'extensions_map', {}),
+                      '.apk': 'application/vnd.android.package-archive'}
+ThreadingHTTPServer(('0.0.0.0', 8765), H).serve_forever()
+"
+fi
+
 echo ""
 echo "==> [3/4] flutter build apk --release --split-per-abi"
 # split-per-abi gives us 3 smaller APKs (arm64-v8a, armeabi-v7a, x86_64)
 # so the A23 (arm64) and Bravia (armv7) each get the right one.
 flutter build apk --release --split-per-abi
 
-ARM64="build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
-ARMV7="build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk"
+ARM64="$APK_DIR/app-arm64-v8a-release.apk"
+ARMV7="$APK_DIR/app-armeabi-v7a-release.apk"
 
 if [[ ! -f "$ARM64" ]]; then
   echo "❌ arm64 APK not found at $ARM64"
@@ -82,7 +123,7 @@ case "$target" in
     adb -s "$TV_HOST" install -r "$ARMV7"
     ;;
   *)
-    echo "❌ Unknown target '$target' — use: build | a23 | tv | all"
+    echo "❌ Unknown target '$target' — use: build | a23 | tv | all | wifi"
     exit 1
     ;;
 esac
