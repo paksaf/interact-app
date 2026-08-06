@@ -23,6 +23,7 @@
 // (`.data` or `.body`, object OR map). `activeCalls()` returns CallKitParams.
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 
@@ -97,6 +98,21 @@ class CallKitService {
     try {
       await FlutterCallkitIncoming.endCall(id);
     } catch (_) {/* best-effort */}
+  }
+
+  /// True when the native CallKit surface already ACCEPTED this call — used
+  /// by IncomingCallScreen to skip its own accept ask (the "press 2 times to
+  /// connect" defect: native accept → app opens → in-app ring asked AGAIN
+  /// because the cold-start acceptance was never consumed).
+  static Future<bool> wasNativelyAccepted(String threadId) async {
+    try {
+      final dynamic calls = await FlutterCallkitIncoming.activeCalls();
+      if (calls is! List) return false;
+      for (final dynamic raw in calls) {
+        if (_idOf(raw) == threadId && _acceptedOf(raw)) return true;
+      }
+    } catch (_) {/* best-effort */}
+    return false;
   }
 
   static Future<void> endAllCalls() async {
@@ -179,6 +195,9 @@ class CallKitService {
       final dynamic calls = await FlutterCallkitIncoming.activeCalls();
       if (calls is! List) return;
       for (final dynamic raw in calls) {
+        // Diagnostic: exactly what Android reports for a cold-start entry —
+        // if "accept twice" recurs, this line names the missing accepted-key.
+        debugPrint('[callkit] coldStart entry: $raw');
         if (!_acceptedOf(raw)) continue;
         final id = _idOf(raw);
         if (id.isEmpty) continue;
@@ -221,7 +240,24 @@ class CallKitService {
 
   static bool _acceptedOf(dynamic p) {
     if (p == null) return false;
-    if (p is Map) return p['isAccepted'] == true || p['accepted'] == true;
+    if (p is Map) {
+      // Android reports acceptance inconsistently across plugin versions:
+      // bool true, string 'true', varying key casing, sometimes nested under
+      // 'extra'. Recognize them all — a missed flag here is what caused the
+      // "accept twice" cold-start defect (2026-08-06).
+      bool truthy(dynamic v) => v == true || v == 'true' || v == 1;
+      if (truthy(p['isAccepted']) ||
+          truthy(p['accepted']) ||
+          truthy(p['is_accepted'])) {
+        return true;
+      }
+      final extra = p['extra'];
+      if (extra is Map &&
+          (truthy(extra['isAccepted']) || truthy(extra['accepted']))) {
+        return true;
+      }
+      return false;
+    }
     try {
       return p.isAccepted == true;
     } catch (_) {

@@ -54,6 +54,17 @@ class _IncomingCallScreenState extends ConsumerState<IncomingCallScreen> {
     // the server flips this invite off "ringing"; poll and auto-dismiss so the
     // ring doesn't keep going after the caller has gone (WhatsApp behaviour).
     _cancelWatch = Timer.periodic(const Duration(seconds: 3), (_) => _watchCancel());
+    // "Press twice to connect" guard: if the user ALREADY accepted this call
+    // on the native CallKit surface (cold start — the accept event fired
+    // before the Flutter engine was up and checkColdStart couldn't read the
+    // accepted flag), honour that acceptance instead of asking again.
+    unawaited(() async {
+      if (await CallKitService.wasNativelyAccepted(widget.call.threadId)) {
+        if (!mounted || _answered) return;
+        debugPrint('[call] in-app ring: native accept detected → auto-accept');
+        await _accept();
+      }
+    }());
     // Belt-and-suspenders: even if `isRinging()` never reports the invite gone
     // (stale server row, or every poll returns a network blip → true), give up
     // after [_maxRingDuration] so the buzz can NEVER loop indefinitely.
