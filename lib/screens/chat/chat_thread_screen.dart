@@ -14,21 +14,33 @@ import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:video_player/video_player.dart';
 
 import 'package:sahulat_common/sahulat_common.dart';
 
+import '../../core/l10n/locale_prefs.dart';
+import '../../l10n/app_localizations.dart';
 import '../../models/chat.dart';
 import '../../services/chat_api.dart';
 import '../../services/message_watcher.dart';
 import '../../services/call_signaling.dart';
 import '../../services/auth_service.dart';
+import '../../services/talk_flags.dart';
+import '../../services/outbox_service.dart';
+import '../../services/talk_api.dart';
+import '../../services/transcription_service.dart';
+import '../../services/voice/talk_stt_service.dart';
+import '../../services/voice/talk_tts_service.dart';
 import '../../utils/chat_formatters.dart';
+import '../../utils/phone_normalize.dart';
 import 'chat_ai_actions.dart';
 import 'message_search_screen.dart';
 import 'communities_screen.dart';
@@ -65,6 +77,28 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
   final _player = AudioPlayer();
   bool _recording = false;
   bool _sending = false;
+  bool _dictating = false;
+
+  String get _appLang {
+    final override = ref.read(localeControllerProvider.notifier).localeOverride;
+    if (override != null) return override.languageCode;
+    return Localizations.localeOf(context).languageCode;
+  }
+  // Guards _startCall so a single call action can only fire ring() once per
+  // attempt (double-tap / rapid re-entry would otherwise create multiple
+  // invites and ring the peer several times — #dedup).
+  bool _ringing = false;
+  // True once the message list has been auto-scrolled to the newest message
+  // for the first time. Drives the one-shot initial jump-to-bottom in the
+  // FutureBuilder; subsequent polls only auto-stick when the user is already
+  // near the bottom (see _maybeStickToBottom).
+  bool _initialScrollDone = false;
+  // True once the first message load resolves. Gates the full-screen spinner
+  // so the 3s poll (which swaps _messages for a fresh Future.value) can't drop
+  // the list back to a loading spinner each tick — that was the "screen flash".
+  bool _firstLoadDone = false;
+  /// Set when the first load fails — FutureBuilder must not spin forever.
+  String? _loadError;
   DateTime? _recordStart;
   Timer? _recordTimer;
   Duration _recordElapsed = Duration.zero;
@@ -72,13 +106,18 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
   String? _myId;
 
   /// Broadcast channel where I'm NOT the owner → composer is hidden (server
-  /// also 403s a non-owner post). Only applies once _myId + participants load.
+  /// also 403s a non-owner post). Until `_myId` resolves, treat channels as
+  /// read-only so the composer never flashes for non-owners.
   bool get _isReadOnlyChannel {
-    if (_currentThread.subjectType != 'channel' || _myId == null) return false;
+    if (_currentThread.subjectType != 'channel') return false;
+    if (_myId == null) return true;
     final iOwn = _currentThread.participants
         .any((p) => p.role == 'owner' && p.userId == _myId);
     return !iOwn;
   }
+
+  StreamSubscription<int>? _outboxSub;
+  int _outboxPending = 0;
 
   @override
   void initState() {
@@ -95,15 +134,43 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
     // also seed it, but this covers the moment _openAiMenu fires
     // before the first build cycle resolves.
     _messages.then((m) {
-      if (mounted) _latestMessages = m;
-    }).catchError((_) {});
+      if (mounted) {
+        setState(() {
+          _latestMessages = m;
+          _firstLoadDone = true;
+          _loadError = null;
+        });
+      }
+    }).catchError((Object e) {
+      if (mounted) {
+        setState(() {
+          _firstLoadDone = true;
+          _loadError = e.toString().replaceFirst('Exception: ', '');
+        });
+      }
+    });
+    // When the offline outbox drains, refresh so pending clocks clear.
+    _outboxSub = OutboxService.instance.changes.listen((n) {
+      _outboxPending = n;
+      if (!mounted) return;
+      if (n == 0 && _latestMessages.any((m) => m.pending)) {
+        unawaited(_refresh());
+      } else {
+        setState(() {});
+      }
+    });
+    unawaited(OutboxService.instance.pendingCount().then((n) {
+      if (mounted) setState(() => _outboxPending = n);
+    }));
     // Wire the composer → typing heartbeat. Listener fires on every
     // keystroke; we throttle to a server POST every 3s (#146).
     _textCtrl.addListener(_onTextChanged);
-    // Periodic refresh — Phase 1.5 is poll-based. We tighten to 3s so
-    // the typing bubble feels live (anything slower and the dots lag
-    // visibly behind the peer typing). Phase 2 swaps for WebSocket.
-    _pollTimer = Timer.periodic(const Duration(seconds: 3), (t) {
+    // Periodic refresh — Phase 1.5 is poll-based. Tightened to 2s so new
+    // incoming messages (incl. attachments/video) appear within a couple
+    // seconds instead of lagging, and the typing bubble stays live.
+    // Only runs while this screen is mounted (self-cancels below, and is
+    // cancelled in dispose). Phase 2 swaps for WebSocket.
+    _pollTimer = Timer.periodic(const Duration(seconds: 2), (t) {
       if (!mounted) {
         t.cancel();
         return;
@@ -119,6 +186,10 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
     if (watcher.activeThreadId == widget.thread.id) {
       watcher.activeThreadId = null;
     }
+    TalkSttService.instance.removeListener(_onSttTick);
+    unawaited(TalkSttService.instance.cancel());
+    unawaited(TalkTtsService.instance.stop());
+    _outboxSub?.cancel();
     _textCtrl.removeListener(_onTextChanged);
     _pollTimer?.cancel();
     _typingDebounce?.cancel();
@@ -162,10 +233,16 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
                 view.thread.peerHasInteractInstalled,
       );
       _latestMessages = view.messages;
+      _firstLoadDone = true;
       setState(() {
         _currentThread = mergedThread;
         _messages = Future.value(view.messages);
       });
+      // Keep the newest message visible after a poll brings new ones — but
+      // only if the user is parked at/near the bottom. Called right after
+      // setState (before the next layout pass) so the near-bottom check is
+      // measured against what the user was actually looking at.
+      _maybeStickToBottom();
     } catch (_) {
       // Don't surface poll errors — the visible state is the FutureBuilder
       // which still has the prior frame's data.
@@ -182,9 +259,40 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
   /// having INTERACT installed, surface a clear message instead of
   /// dropping the user into a call screen that the peer will never
   /// answer. They can still proceed manually if they want.
-  void _startCall({required String mode}) {
+  Future<void> _startCall({required String mode}) async {
+    // Idempotency guard — one call action = exactly one ring(). Without this
+    // a rapid double-tap (or re-entry before navigation) creates multiple
+    // invites and rings the peer several times.
+    if (_ringing) return;
+    _ringing = true;
+    try {
+      await _startCallInner(mode: mode);
+    } finally {
+      if (mounted) _ringing = false;
+    }
+  }
+
+  Future<void> _startCallInner({required String mode}) async {
     final peerActive = _currentThread.peerHasInteractInstalled;
     final peerName = _currentThread.title;
+    // Room deep-link carrying peer name/avatar (WhatsApp-style "Calling…"
+    // overlay) and — once the ring is created — the inviteId so the room's
+    // hang-up can remotely cancel the callee's ring.
+    String roomUri({String? inviteId}) => Uri(
+          // Flag-gated: '/call-lk' (LiveKit + captions) when TALK_LK_CALLS is
+          // on, else the unchanged P2P '/room'. Ring flow below is unchanged.
+          path: TalkFlags.callRoomPath(),
+          queryParameters: {
+            'host': 'true',
+            'mode': mode,
+            'threadId': widget.thread.id,
+            if (peerName.isNotEmpty) 'peerName': peerName,
+            if (_currentThread.avatarUrl != null &&
+                _currentThread.avatarUrl!.isNotEmpty)
+              'peerAvatar': _currentThread.avatarUrl!,
+            if (inviteId != null) 'inviteId': inviteId,
+          },
+        ).toString();
     if (peerActive == false) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -195,7 +303,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
           duration: const Duration(seconds: 5),
           action: SnackBarAction(
             label: 'Call anyway',
-            onPressed: () => context.push('/room?host=true&mode=$mode&threadId=${widget.thread.id}'),
+            onPressed: () => context.push(roomUri()),
           ),
         ),
       );
@@ -204,10 +312,12 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Ringing $peerName…'), duration: const Duration(seconds: 3)),
     );
-    // Ring the peer (full-screen incoming call on their device), then open
-    // the room as host. host=true → MeetingRoomScreen calls createRoom().
-    ref.read(callSignalingProvider).ring(widget.thread.id, mode);
-    context.push('/room?host=true&mode=$mode&threadId=${widget.thread.id}');
+    // Ring the peer first so we get the inviteId, then open the room as host
+    // carrying it (host=true → MeetingRoomScreen calls createRoom()).
+    final inviteId =
+        await ref.read(callSignalingProvider).ring(widget.thread.id, mode);
+    if (!mounted) return;
+    context.push(roomUri(inviteId: inviteId));
   }
 
   /// Group actions (add member / leave) — group threads only.
@@ -287,12 +397,18 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
       ),
     );
     if (phone == null || phone.isEmpty) return;
+    final normalized = normalizeInteractPhone(phone) ?? phone;
     try {
-      final ok = await ref.read(chatApiProvider).addGroupMember(widget.thread.id, phone);
+      final ok = await ref
+          .read(chatApiProvider)
+          .addGroupMember(widget.thread.id, normalized);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(ok ? 'Member added' : '$phone isn\'t on INTERACT yet'),
+        content: Text(
+          ok ? 'Member added' : '$normalized isn\'t on INTERACT yet',
+        ),
       ));
+      if (ok) await _refresh();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Add failed: $e')));
@@ -438,6 +554,40 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
     );
   }
 
+  Future<void> _setDisappearing(int seconds) async {
+    try {
+      final applied = await ref
+          .read(chatApiProvider)
+          .setDisappearing(widget.thread.id, seconds);
+      if (!mounted) return;
+      setState(() {
+        _currentThread = _currentThread.copyWith(
+          disappearingSeconds: applied,
+          clearDisappearing: applied == null || applied == 0,
+        );
+        // Re-filter visible bubbles under the new timer.
+        _messages = Future.value(
+          _latestMessages
+              .where((m) => _currentThread.messageStillVisible(m.sentAt))
+              .toList(),
+        );
+      });
+      final label = switch (seconds) {
+        0 => 'Disappearing messages off',
+        3600 => 'Messages disappear after 1 hour',
+        86400 => 'Messages disappear after 24 hours',
+        604800 => 'Messages disappear after 7 days',
+        _ => 'Disappearing timer updated',
+      };
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(label)));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('$e')));
+    }
+  }
+
   Future<void> _sendText() async {
     final text = _textCtrl.text.trim();
     if (text.isEmpty || _sending) return;
@@ -479,45 +629,175 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
 
   static const int _maxAttachmentBytes = 50 * 1024 * 1024; // 50 MB
 
+  /// Share a location pin as chat text + Interact Maps deep link so the peer
+  /// can open Navigate on the same coordinates (Maps donor path).
+  Future<void> _shareLocationPin() async {
+    if (_sending) return;
+    setState(() => _sending = true);
+    try {
+      var perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.denied ||
+          perm == LocationPermission.deniedForever) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+                content: Text('Location permission is needed to share a pin.')),
+          );
+        }
+        return;
+      }
+      final pos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      ).timeout(const Duration(seconds: 12));
+      final lat = pos.latitude.toStringAsFixed(6);
+      final lng = pos.longitude.toStringAsFixed(6);
+      final mapsLink =
+          'https://talk.interactpak.com/j/LOC?lat=$lat&lng=$lng';
+      // Prefer Maps deep link when installed; https fallback is human-readable.
+      final deep =
+          'interactmaps://route?lat=$lat&lng=$lng&name=Shared%20pin';
+      final body =
+          '📍 Shared location\n$lat, $lng\nOpen in Maps: $deep\n$mapsLink';
+      final sent = await ref
+          .read(chatApiProvider)
+          .sendText(widget.thread.id, body);
+      if (sent.pending) {
+        setState(() {
+          _latestMessages = [..._latestMessages, sent];
+          _messages = Future.value(_latestMessages);
+        });
+      } else {
+        await _refresh();
+      }
+      _scrollToBottom();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not share location: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
   /// Attach flow: pick Photo / Video / File → 50 MB guard → upload to
   /// qurbanisahulat /api/v1/media/upload → send the returned URL as the
   /// message attachment. Backend caps images at 5 MB, video/audio/file at 50 MB.
   Future<void> _pickAndSendAttachment() async {
-    if (_sending) return;
+    if (_sending) {
+      debugPrint('[attach] ignored — already sending');
+      return;
+    }
     final choice = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
+      isScrollControlled: true,
       builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+        // Scrollable so Share location stays reachable on short phones (e.g. Redmi).
+        child: ListView(
+          shrinkWrap: true,
           children: [
             ListTile(
+              leading: const Icon(Icons.photo_camera_outlined),
+              title: const Text('Camera'),
+              subtitle: const Text('Capture with Talk camera'),
+              onTap: () => Navigator.pop(ctx, 'camera'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.auto_awesome),
+              title: const Text('Camera FX'),
+              subtitle: const Text('Background effects & filters'),
+              onTap: () => Navigator.pop(ctx, 'camera-fx'),
+            ),
+            ListTile(
               leading: const Icon(Icons.photo_outlined),
-              title: const Text('Photo'),
+              title: const Text('Photo library'),
               onTap: () => Navigator.pop(ctx, 'photo'),
             ),
             ListTile(
               leading: const Icon(Icons.videocam_outlined),
               title: const Text('Video'),
+              subtitle: const Text('Pick from gallery'),
               onTap: () => Navigator.pop(ctx, 'video'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.videocam),
+              title: const Text('Record video'),
+              subtitle: const Text('Capture with system camera (max 60s)'),
+              onTap: () => Navigator.pop(ctx, 'record-video'),
             ),
             ListTile(
               leading: const Icon(Icons.insert_drive_file_outlined),
               title: const Text('File / audio / document'),
               onTap: () => Navigator.pop(ctx, 'file'),
             ),
+            ListTile(
+              leading: const Icon(Icons.location_on_outlined),
+              title: const Text('Share location'),
+              subtitle: const Text('Pin + open in Interact Maps'),
+              onTap: () => Navigator.pop(ctx, 'location'),
+            ),
           ],
         ),
       ),
     );
     if (choice == null || !mounted) return;
+    debugPrint('[attach] choice=$choice');
+
+    // Camera FX moved into the attach menu (Phase-1 redesign). It's a
+    // full-screen background-effects surface, not an inline picker — route to
+    // the existing CameraEffectsScreen and stop the attachment flow here.
+    if (choice == 'camera-fx') {
+      context.push('/camera-effects');
+      return;
+    }
+
+    // Location pin → text + Maps deep link (Maps donor: interactmaps://route).
+    if (choice == 'location') {
+      await _shareLocationPin();
+      return;
+    }
 
     File? file;
     try {
-      if (choice == 'photo' || choice == 'video') {
+      if (choice == 'camera') {
+        // Use the SYSTEM camera via image_picker. The in-app CameraController
+        // path (ChatCameraCaptureScreen) crashes on many budget devices with
+        // CameraX "No supported surface combination … too many use cases"
+        // (Preview + JPEG capture + Video bound together at 720p). The system
+        // camera handles all surfaces natively and never hits that limit, and
+        // it can't hang the app the way the embedded controller did.
+        final x = await ImagePicker().pickImage(
+          source: ImageSource.camera,
+          imageQuality: 85,
+          requestFullMetadata: false,
+        );
+        if (x != null) file = File(x.path);
+      } else if (choice == 'record-video') {
+        // Record a SHORT clip via the SYSTEM camera (image_picker), NOT the
+        // in-app CameraController (that crashes on budget devices — see the
+        // 'camera' branch above). 60s cap keeps the upload under the 50 MB
+        // guard. Flows through the same uploadMedia + sendAttachment path
+        // as the 'video' (gallery) choice.
+        final x = await ImagePicker().pickVideo(
+          source: ImageSource.camera,
+          maxDuration: const Duration(seconds: 60),
+        );
+        if (x != null) file = File(x.path);
+      } else if (choice == 'photo' || choice == 'video') {
         final picker = ImagePicker();
+        // requestFullMetadata:false avoids a known Android 13+ photo-picker
+        // hang on some OEMs (skips the EXIF/location metadata round-trip).
         final x = choice == 'photo'
-            ? await picker.pickImage(source: ImageSource.gallery, imageQuality: 85)
+            ? await picker.pickImage(
+                source: ImageSource.gallery,
+                imageQuality: 85,
+                requestFullMetadata: false,
+              )
             : await picker.pickVideo(source: ImageSource.gallery);
         if (x != null) file = File(x.path);
       } else {
@@ -526,15 +806,18 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
         if (p != null) file = File(p);
       }
     } catch (e) {
+      debugPrint('[attach] picker error: $e');
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text('Could not pick file: $e')));
       }
       return;
     }
+    debugPrint('[attach] picker returned file=${file != null} path=${file?.path}');
     if (file == null || !mounted) return;
 
     final size = await file.length();
+    debugPrint('[attach] file length=$size bytes');
     if (size > _maxAttachmentBytes) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -545,7 +828,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
     }
 
     // Soft blur gate for photos (TryOn / Sahulat donor) — Retake or Use anyway.
-    if (choice == 'photo') {
+    if (choice == 'photo' || choice == 'camera') {
       try {
         final bytes = await file.readAsBytes();
         final gate = await BlurSoftGate.evaluate(bytes);
@@ -571,22 +854,78 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
     }
 
     setState(() => _sending = true);
+    final caption = _textCtrl.text.trim();
     try {
+      debugPrint('[attach] uploadMedia start (${file.path})');
       final up = await ref.read(chatApiProvider).uploadMedia(file);
-      await ref.read(chatApiProvider).sendAttachment(
+      debugPrint('[attach] uploadMedia done url=${up.url}');
+      final sent = await ref.read(chatApiProvider).sendAttachment(
             widget.thread.id,
             url: up.url,
-            caption: _textCtrl.text.trim(),
+            caption: caption,
           );
       _textCtrl.clear();
-      await _refresh();
+      if (sent.pending) {
+        setState(() {
+          _latestMessages = [..._latestMessages, sent];
+          _messages = Future.value(_latestMessages);
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Queued — will send when you’re back online'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      } else {
+        await _refresh();
+      }
       _scrollToBottom();
     } catch (e) {
+      debugPrint('[attach] failed: $e — queueing locally');
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Attachment failed: $e')),
-      );
+      // Offline / upload failure: keep the file in the outbox.
+      try {
+        final pending = await ref.read(chatApiProvider).queueAttachment(
+              widget.thread.id,
+              file,
+              caption: caption,
+            );
+        _textCtrl.clear();
+        setState(() {
+          _latestMessages = [..._latestMessages, pending];
+          _messages = Future.value(_latestMessages);
+        });
+        _scrollToBottom();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Saved offline — will upload when online'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      } catch (e2) {
+        if (!mounted) return;
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Attachment failed'),
+            content: SingleChildScrollView(child: Text('$e\n$e2')),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Close'),
+              ),
+            ],
+          ),
+        );
+      }
     } finally {
+      // _sending is only ever set true inside this block, so the finally
+      // guarantees it can never get stuck (all earlier early-returns happen
+      // before it is set).
       if (mounted) setState(() => _sending = false);
     }
   }
@@ -627,16 +966,13 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
     try {
       final api = ref.read(chatApiProvider);
       final up = await api.uploadMedia(File(path));
-      // On-device Whisper is opt-in / model-gated — never block send on STT.
-      String? transcript;
-      try {
-        transcript = await api.transcribeVoiceNote(File(path));
-      } catch (_) {/* best-effort */}
+      // Transcription is now ON-DEMAND (tap "Transcribe" on the voice bubble →
+      // cloud Deepgram via /api/v1/talk/transcribe). We no longer auto-STT at
+      // send time, so voice sends stay fast and don't burn Deepgram minutes.
       await api.sendVoice(
         widget.thread.id,
         mediaUrl: up.url,
         durationSec: durSec,
-        transcript: transcript,
       );
       await _refresh();
       _scrollToBottom();
@@ -674,9 +1010,92 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
     } catch (_) {/* best-effort — overlay is non-critical */}
   }
 
+  Future<void> _toggleDictate() async {
+    final stt = TalkSttService.instance;
+    if (_dictating) {
+      final text = await stt.stop();
+      if (!mounted) return;
+      setState(() => _dictating = false);
+      if (text != null && text.isNotEmpty) {
+        final base = _textCtrl.text;
+        _textCtrl.text = base.isEmpty ? text : '$base $text';
+        _textCtrl.selection =
+            TextSelection.collapsed(offset: _textCtrl.text.length);
+        setState(() {});
+      }
+      return;
+    }
+    setState(() => _dictating = true);
+    stt.addListener(_onSttTick);
+    try {
+      final started = await stt.start(appLang: _appLang);
+      // Unavailable (mic denied / init failed) — reset UI + fail soft.
+      if (!started && mounted) {
+        stt.removeListener(_onSttTick);
+        setState(() => _dictating = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Voice input unavailable')),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        stt.removeListener(_onSttTick);
+        setState(() => _dictating = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Voice input unavailable')),
+        );
+      }
+    }
+  }
+
+  void _onSttTick() {
+    if (!mounted || !_dictating) return;
+    final partial = TalkSttService.instance.partial;
+    if (partial.isNotEmpty) {
+      // Live preview in the composer while listening.
+      _textCtrl.value = TextEditingValue(
+        text: partial,
+        selection: TextSelection.collapsed(offset: partial.length),
+      );
+    }
+    if (!TalkSttService.instance.isListening &&
+        TalkSttService.instance.finalText.isNotEmpty) {
+      final text = TalkSttService.instance.finalText;
+      _textCtrl.value = TextEditingValue(
+        text: text,
+        selection: TextSelection.collapsed(offset: text.length),
+      );
+      setState(() => _dictating = false);
+      TalkSttService.instance.removeListener(_onSttTick);
+    } else {
+      setState(() {});
+    }
+  }
+
+  Future<void> _readAloud(Message m) async {
+    final body = m.body.trim();
+    if (body.isEmpty) return;
+    final tts = TalkTtsService.instance;
+    if (tts.isSpeaking) {
+      await tts.stop();
+      return;
+    }
+    try {
+      await tts.speak(body, appLang: _appLang);
+    } catch (_) {
+      // TTS engine unavailable — fail soft, never crash the chat.
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Read aloud unavailable')),
+        );
+      }
+    }
+  }
+
   /// Long-press action sheet: react / reply / pin / edit / delete (P1).
   Future<void> _showMessageActions(Message m) async {
     if (m.deleted) return;
+    final l10n = AppLocalizations.of(context);
     final action = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
@@ -704,6 +1123,16 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
                 ),
               ),
               const Divider(height: 1),
+              if (m.kind == MessageKind.text && m.body.trim().isNotEmpty)
+                ListTile(
+                  leading: Icon(TalkTtsService.instance.isSpeaking
+                      ? Icons.stop
+                      : Icons.volume_up_outlined),
+                  title: Text(TalkTtsService.instance.isSpeaking
+                      ? l10n.voiceStopSpeaking
+                      : l10n.voiceReadAloud),
+                  onTap: () => Navigator.pop(ctx, 'read_aloud'),
+                ),
               ListTile(
                 leading: const Icon(Icons.reply),
                 title: const Text('Reply'),
@@ -734,6 +1163,10 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
     if (action == null || !mounted) return;
     if (action.startsWith('react:')) {
       await _toggleReaction(m, action.substring(6));
+      return;
+    }
+    if (action == 'read_aloud') {
+      await _readAloud(m);
       return;
     }
     final api = ref.read(chatApiProvider);
@@ -802,6 +1235,22 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
     });
   }
 
+  /// After the message list updates (poll/refresh), keep the newest message
+  /// in view ONLY when the user is already at/near the bottom (within ~150px
+  /// of the end). If they've scrolled up to read history, leave their
+  /// position untouched. Must be called synchronously right after the
+  /// list's setState — at that instant the controller still reports the
+  /// PRE-update extent, so "near bottom" reflects what the user was looking
+  /// at; _scrollToBottom then animates to the freshly-grown extent on the
+  /// next frame.
+  void _maybeStickToBottom() {
+    if (!_scrollCtrl.hasClients) return;
+    final pos = _scrollCtrl.position;
+    if (pos.maxScrollExtent - pos.pixels <= 150) {
+      _scrollToBottom();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -850,7 +1299,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
                     //   - peer doesn't have INTERACT installed → warning
                     //   - group thread → member count
                     //   - default → "tap for info"
-                    if (_currentThread.peerIsTyping(null)) {
+                    if (_currentThread.peerIsTyping(_myId)) {
                       return Text(
                         'typing…',
                         style: TextStyle(
@@ -872,9 +1321,13 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
                       );
                     }
                     return Text(
-                      _currentThread.isGroup
-                          ? '${_currentThread.participants.length} members'
-                          : 'tap for info',
+                      _currentThread.isChannel
+                          ? (_isReadOnlyChannel
+                              ? 'Broadcast channel'
+                              : 'Channel · you can post')
+                          : _currentThread.isGroup
+                              ? '${_currentThread.participants.length} members'
+                              : 'tap for info',
                       style: TextStyle(fontSize: 11, color: cs.outline),
                     );
                   }),
@@ -913,30 +1366,162 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
             tooltip: 'Voice call',
             onPressed: () => _startCall(mode: 'voice'),
           ),
-          if (_currentThread.isGroup)
+          PopupMenuButton<int>(
+            tooltip: 'Disappearing messages',
+            icon: Icon(
+              Icons.timer_outlined,
+              color: (_currentThread.disappearingSeconds ?? 0) > 0
+                  ? Theme.of(context).colorScheme.primary
+                  : null,
+            ),
+            onSelected: _setDisappearing,
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 0, child: Text('Off')),
+              PopupMenuItem(value: 3600, child: Text('1 hour')),
+              PopupMenuItem(value: 86400, child: Text('24 hours')),
+              PopupMenuItem(value: 604800, child: Text('7 days')),
+            ],
+          ),
+          if (_currentThread.isGroup || _currentThread.isChannel)
             IconButton(
-              icon: const Icon(Icons.group_outlined),
-              tooltip: 'Group',
+              icon: Icon(_currentThread.isChannel
+                  ? Icons.campaign_outlined
+                  : Icons.group_outlined),
+              tooltip: _currentThread.isChannel ? 'Channel' : 'Group',
               onPressed: _groupMenu,
             ),
         ],
       ),
       body: Column(
         children: [
+          if ((_currentThread.disappearingSeconds ?? 0) > 0)
+            Material(
+              color: cs.primaryContainer.withValues(alpha: 0.55),
+              child: ListTile(
+                dense: true,
+                leading: Icon(Icons.timer_outlined, color: cs.primary, size: 20),
+                title: Text(
+                  switch (_currentThread.disappearingSeconds) {
+                    3600 => 'Disappearing messages · 1 hour',
+                    86400 => 'Disappearing messages · 24 hours',
+                    604800 => 'Disappearing messages · 7 days',
+                    _ => 'Disappearing messages on',
+                  },
+                  style: TextStyle(fontSize: 13, color: cs.onPrimaryContainer),
+                ),
+              ),
+            ),
           Expanded(
             child: FutureBuilder<List<Message>>(
               future: _messages,
+              // Carry the cached list across each poll's future swap so the
+              // builder keeps rendering messages instead of flashing a spinner.
+              initialData: _latestMessages,
               builder: (ctx, snap) {
-                if (snap.connectionState != ConnectionState.done) {
+                if (snap.hasError && !_firstLoadDone) {
+                  _firstLoadDone = true;
+                  _loadError ??=
+                      snap.error.toString().replaceFirst('Exception: ', '');
+                }
+                final raw = snap.data ?? const <Message>[];
+                // Spinner only during the very first load (no cached messages
+                // yet). Afterwards initialData (= _latestMessages) keeps the
+                // prior frame's list visible, so 3s polls never flash a spinner.
+                if (!_firstLoadDone && raw.isEmpty && _loadError == null) {
                   return const Center(child: CircularProgressIndicator());
                 }
-                final msgs = snap.data ?? const <Message>[];
+                if (_loadError != null && raw.isEmpty) {
+                  return Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            'Couldn’t load messages',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: cs.onSurface,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            _loadError!,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: cs.outline, fontSize: 13),
+                          ),
+                          const SizedBox(height: 16),
+                          FilledButton(
+                            onPressed: () {
+                              setState(() {
+                                _loadError = null;
+                                _firstLoadDone = false;
+                                _messages = ref
+                                    .read(chatApiProvider)
+                                    .messages(widget.thread.id);
+                                _messages.then((m) {
+                                  if (mounted) {
+                                    setState(() {
+                                      _latestMessages = m;
+                                      _firstLoadDone = true;
+                                    });
+                                  }
+                                }).catchError((Object e) {
+                                  if (mounted) {
+                                    setState(() {
+                                      _firstLoadDone = true;
+                                      _loadError = e
+                                          .toString()
+                                          .replaceFirst('Exception: ', '');
+                                    });
+                                  }
+                                });
+                              });
+                            },
+                            child: const Text('Retry'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }
+                final msgs = raw
+                    .where((m) => _currentThread.messageStillVisible(m.sentAt))
+                    .toList();
                 // Keep the cached snapshot fresh for the ✨ AI menu.
-                if (msgs.isNotEmpty) _latestMessages = msgs;
+                // Prefer unfiltered cache so disappearing filter doesn't
+                // permanently drop still-valid rows from memory.
+                if (raw.isNotEmpty) _latestMessages = raw;
                 if (msgs.isEmpty) {
                   return Center(
-                    child: Text('No messages yet — say hi 👋',
-                        style: TextStyle(color: cs.outline)),
+                    child: Padding(
+                      padding: const EdgeInsets.all(28),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.chat_bubble_outline,
+                              size: 48, color: cs.outline),
+                          const SizedBox(height: 12),
+                          Text(
+                            _isReadOnlyChannel
+                                ? 'No posts in this channel yet'
+                                : 'No messages yet',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: cs.onSurface,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            _isReadOnlyChannel
+                                ? 'Only the owner can post here.'
+                                : 'Say hi — or tap the paperclip to share a photo.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: cs.outline, fontSize: 13),
+                          ),
+                        ],
+                      ),
+                    ),
                   );
                 }
                 // Interleave messages with day-separator chips when the
@@ -970,8 +1555,22 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
                 // so it sits where the peer's next message would land.
                 // Shows only when `_currentThread.peerIsTyping` is true
                 // (any non-self participant has typingAt within last 5s).
-                if (_currentThread.peerIsTyping(null)) {
+                if (_currentThread.peerIsTyping(_myId)) {
                   items.add(const _TypingBubble());
+                }
+                // First render with messages: land at the newest message so
+                // the thread opens at the bottom (WhatsApp behaviour) instead
+                // of the oldest message at the top. One-shot — subsequent
+                // updates are handled by _maybeStickToBottom in _refresh. The
+                // post-frame callback runs after this build's layout, so the
+                // controller has clients and the final maxScrollExtent.
+                if (!_initialScrollDone) {
+                  _initialScrollDone = true;
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (_scrollCtrl.hasClients) {
+                      _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
+                    }
+                  });
                 }
                 return ListView(
                   controller: _scrollCtrl,
@@ -981,6 +1580,38 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
               },
             ),
           ),
+          if (_outboxPending > 0)
+            Material(
+              color: Theme.of(context).colorScheme.tertiaryContainer,
+              child: InkWell(
+                onTap: () => OutboxService.instance.flush(),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  child: Row(
+                    children: [
+                      Icon(Icons.cloud_upload_outlined,
+                          size: 16,
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onTertiaryContainer),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '$_outboxPending waiting to send — tap to retry now',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onTertiaryContainer,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           if (_isReadOnlyChannel)
             Container(
               width: double.infinity,
@@ -1033,6 +1664,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
             controller: _textCtrl,
             sending: _sending,
             recording: _recording,
+            dictating: _dictating,
             recordElapsed: _recordElapsed,
             onSendText: _sendText,
             onStartRecord: _startRecording,
@@ -1040,6 +1672,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
             onCancelRecord: _cancelRecording,
             onAttach: _pickAndSendAttachment,
             onSchedule: _scheduleSend,
+            onDictate: _toggleDictate,
           ),
           ],
         ],
@@ -1166,6 +1799,26 @@ class _MessageBubble extends StatelessWidget {
                           padding: const EdgeInsets.only(top: 4),
                           child: Text(message.transcript!, style: TextStyle(color: fg, fontSize: 12)),
                         ),
+                      // On-demand transcription (cloud Deepgram) — shown when
+                      // the note has no transcript yet.
+                      if (message.mediaUrl != null && message.transcript == null)
+                        TextButton.icon(
+                          style: TextButton.styleFrom(
+                            foregroundColor: fg,
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            minimumSize: const Size(0, 28),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          icon: const Icon(Icons.subtitles_outlined, size: 16),
+                          label: const Text('Transcribe', style: TextStyle(fontSize: 12)),
+                          onPressed: () => showDialog<void>(
+                            context: context,
+                            builder: (_) => _TranscribeDialog(
+                              audioUrl: message.mediaUrl!,
+                              itemId: message.id,
+                            ),
+                          ),
+                        ),
                     ] else if (message.mediaUrl != null) ...[
                       _AttachmentView(url: message.mediaUrl!, fg: fg),
                       if (message.body.trim().isNotEmpty)
@@ -1239,6 +1892,169 @@ class _MessageBubble extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// On-demand voice-note transcription dialog. Runs the hybrid
+/// [TranscriptionService] (cloud Deepgram today; on-device whisper.cpp later),
+/// shows the transcript + language + confidence, and captures 👍/👎 feedback +
+/// Copy. Fail-soft: any error becomes a friendly message with a Retry.
+class _TranscribeDialog extends ConsumerStatefulWidget {
+  const _TranscribeDialog({required this.audioUrl, required this.itemId});
+  final String audioUrl;
+  final String itemId;
+  @override
+  ConsumerState<_TranscribeDialog> createState() => _TranscribeDialogState();
+}
+
+class _TranscribeDialogState extends ConsumerState<_TranscribeDialog> {
+  bool _loading = true;
+  TranscriptionResult? _result;
+  String? _error;
+  String? _rating; // "up" | "down" once submitted
+
+  @override
+  void initState() {
+    super.initState();
+    _run();
+  }
+
+  Future<void> _run() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final r = await ref.read(transcriptionServiceProvider).transcribe(widget.audioUrl);
+      if (!mounted) return;
+      setState(() {
+        _result = r;
+        _loading = false;
+      });
+    } on TranscriptionException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = _friendly(e);
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Transcription unavailable';
+        _loading = false;
+      });
+    }
+  }
+
+  String _friendly(TranscriptionException e) {
+    switch (e.code) {
+      case 'NOT_CONFIGURED':
+        return 'Transcription is not available right now.';
+      case 'RATE_LIMITED':
+        return 'Too many transcriptions — try again in a minute.';
+      case 'NETWORK':
+        return 'No connection — transcription unavailable.';
+      default:
+        return 'Transcription unavailable';
+    }
+  }
+
+  Future<void> _feedback(String rating) async {
+    setState(() => _rating = rating);
+    final ok = await ref.read(talkApiProvider).submitFeedback(
+          feature: 'transcription',
+          itemId: widget.itemId,
+          rating: rating,
+          language: _result?.language,
+        );
+    if (!mounted) return;
+    if (!ok) setState(() => _rating = null); // allow a retry
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(ok ? 'Thanks for the feedback' : "Couldn't send feedback")),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final r = _result;
+    final confPct = r?.confidence == null ? null : (r!.confidence! * 100).round();
+    return AlertDialog(
+      title: const Text('Transcription'),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: _loading
+            ? const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            : _error != null
+                ? Text(_error!)
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SelectableText(r?.text ?? '', style: const TextStyle(fontSize: 15)),
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 4,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          if (r?.language != null && r!.language!.isNotEmpty)
+                            Chip(
+                              label: Text(r.language!.toUpperCase()),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                          if (confPct != null)
+                            Chip(
+                              label: Text('$confPct% confidence'),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                          Text(
+                            r?.source == 'on-device' ? 'on-device' : 'cloud',
+                            style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
+                          ),
+                        ],
+                      ),
+                      if (confPct != null && confPct < 70)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 6),
+                          child: Text('This may be inaccurate.',
+                              style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic)),
+                        ),
+                    ],
+                  ),
+      ),
+      actions: [
+        if (!_loading && _error != null)
+          TextButton(onPressed: _run, child: const Text('Retry')),
+        if (!_loading && _error == null && r != null) ...[
+          IconButton(
+            tooltip: 'Good',
+            icon: Icon(Icons.thumb_up,
+                color: _rating == 'up' ? Theme.of(context).colorScheme.primary : null),
+            onPressed: _rating == null ? () => _feedback('up') : null,
+          ),
+          IconButton(
+            tooltip: 'Bad',
+            icon: Icon(Icons.thumb_down,
+                color: _rating == 'down' ? Theme.of(context).colorScheme.error : null),
+            onPressed: _rating == null ? () => _feedback('down') : null,
+          ),
+          TextButton.icon(
+            icon: const Icon(Icons.copy, size: 16),
+            label: const Text('Copy'),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: r.text));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Copied')),
+              );
+            },
+          ),
+        ],
+        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
+      ],
     );
   }
 }
@@ -1317,14 +2133,16 @@ class _AttachmentView extends StatelessWidget {
         ),
       );
     }
-    final isVideo = {"mp4", "mov", "webm", "avi"}.contains(_ext);
+    final isVideo = {"mp4", "mov", "webm", "avi", "m4v"}.contains(_ext);
+    if (isVideo) {
+      // Play video INLINE (in-app) — tap the thumbnail to load + play with
+      // a play/pause overlay. No external browser launch (that was the old
+      // "Video · tap to open" behaviour).
+      return _InlineVideo(url: url, fg: fg);
+    }
     final isAudio = {"m4a", "mp3", "aac", "ogg", "opus", "wav", "amr"}.contains(_ext);
-    final icon = isVideo
-        ? Icons.play_circle_outline
-        : isAudio
-            ? Icons.audiotrack
-            : Icons.insert_drive_file_outlined;
-    final label = isVideo ? "Video" : isAudio ? "Audio" : "File";
+    final icon = isAudio ? Icons.audiotrack : Icons.insert_drive_file_outlined;
+    final label = isAudio ? "Audio" : "File";
     return GestureDetector(onTap: _open, child: _chip(icon, "$label · tap to open"));
   }
 
@@ -1341,11 +2159,155 @@ class _AttachmentView extends StatelessWidget {
       );
 }
 
+/// Inline chat video: a tappable poster that, on first tap, initialises a
+/// [VideoPlayerController] from the network URL and plays the clip IN-APP
+/// (AspectRatio + VideoPlayer). Tapping the video toggles play/pause. The
+/// controller is lazily created (nothing downloads until the user taps) and
+/// always disposed. Replaces the old "launch URL in browser" behaviour.
+class _InlineVideo extends StatefulWidget {
+  const _InlineVideo({required this.url, required this.fg});
+  final String url;
+  final Color fg;
+  @override
+  State<_InlineVideo> createState() => _InlineVideoState();
+}
+
+class _InlineVideoState extends State<_InlineVideo> {
+  VideoPlayerController? _controller;
+  bool _initializing = false;
+  bool _failed = false;
+
+  @override
+  void dispose() {
+    // Always release the native player + buffered data.
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    if (_initializing || _controller != null) return;
+    setState(() {
+      _initializing = true;
+      _failed = false;
+    });
+    final c = VideoPlayerController.networkUrl(Uri.parse(widget.url));
+    try {
+      await c.initialize();
+      if (!mounted) {
+        await c.dispose();
+        return;
+      }
+      setState(() {
+        _controller = c;
+        _initializing = false;
+      });
+      await c.play();
+    } catch (_) {
+      await c.dispose();
+      if (mounted) {
+        setState(() {
+          _initializing = false;
+          _failed = true;
+        });
+      }
+    }
+  }
+
+  void _togglePlay() {
+    final c = _controller;
+    if (c == null) return;
+    // The ValueListenableBuilder below reacts to the controller's value
+    // change, so no setState is needed here.
+    c.value.isPlaying ? c.pause() : c.play();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = _controller;
+    // Not loaded yet → poster tile with a play badge (or spinner / error).
+    if (c == null || !c.value.isInitialized) {
+      return GestureDetector(
+        onTap: _failed ? _load : (_initializing ? null : _load),
+        child: Container(
+          width: 220,
+          height: 132,
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.85),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Center(
+            child: _initializing
+                ? const SizedBox(
+                    width: 28,
+                    height: 28,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white),
+                  )
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        _failed
+                            ? Icons.error_outline
+                            : Icons.play_circle_fill,
+                        color: Colors.white,
+                        size: 46,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _failed ? 'Tap to retry' : 'Video',
+                        style: const TextStyle(
+                            color: Colors.white70, fontSize: 12),
+                      ),
+                    ],
+                  ),
+          ),
+        ),
+      );
+    }
+    final ar = c.value.aspectRatio == 0 ? 16 / 9 : c.value.aspectRatio;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: GestureDetector(
+        onTap: _togglePlay,
+        child: SizedBox(
+          width: 240,
+          child: AspectRatio(
+            aspectRatio: ar,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                VideoPlayer(c),
+                // Play overlay — shown only while paused.
+                ValueListenableBuilder<VideoPlayerValue>(
+                  valueListenable: c,
+                  builder: (_, value, __) => value.isPlaying
+                      ? const SizedBox.shrink()
+                      : Container(
+                          decoration: const BoxDecoration(
+                            color: Colors.black45,
+                            shape: BoxShape.circle,
+                          ),
+                          padding: const EdgeInsets.all(6),
+                          child: const Icon(Icons.play_arrow,
+                              color: Colors.white, size: 40),
+                        ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _Composer extends StatelessWidget {
   const _Composer({
     required this.controller,
     required this.sending,
     required this.recording,
+    required this.dictating,
     required this.recordElapsed,
     required this.onSendText,
     required this.onStartRecord,
@@ -1353,10 +2315,12 @@ class _Composer extends StatelessWidget {
     required this.onCancelRecord,
     required this.onAttach,
     required this.onSchedule,
+    required this.onDictate,
   });
   final TextEditingController controller;
   final bool sending;
   final bool recording;
+  final bool dictating;
   final Duration recordElapsed;
   final VoidCallback onSendText;
   final VoidCallback onStartRecord;
@@ -1364,10 +2328,12 @@ class _Composer extends StatelessWidget {
   final VoidCallback onCancelRecord;
   final VoidCallback onAttach;
   final VoidCallback onSchedule;
+  final VoidCallback onDictate;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final l10n = AppLocalizations.of(context);
     if (recording) {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
@@ -1417,18 +2383,26 @@ class _Composer extends StatelessWidget {
               tooltip: 'Schedule send',
               onPressed: sending ? null : onSchedule,
             ),
+            IconButton(
+              icon: Icon(
+                dictating ? Icons.mic : Icons.keyboard_voice_outlined,
+                color: dictating ? cs.error : null,
+              ),
+              tooltip: dictating ? l10n.voiceListening : l10n.voiceDictateHint,
+              onPressed: sending || recording ? null : onDictate,
+            ),
             Expanded(
               child: TextField(
                 controller: controller,
                 minLines: 1,
                 maxLines: 6,
-                decoration: const InputDecoration(
-                  hintText: 'Message',
-                  border: OutlineInputBorder(
+                decoration: InputDecoration(
+                  hintText: dictating ? l10n.voiceListening : l10n.messageHint,
+                  border: const OutlineInputBorder(
                     borderRadius: BorderRadius.all(Radius.circular(24)),
                   ),
                   contentPadding:
-                      EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                 ),
                 onChanged: (_) {},
               ),

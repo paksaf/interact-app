@@ -64,6 +64,11 @@ class _InviteScreenState extends ConsumerState<InviteScreen> {
                   FilteringTextInputFormatter.allow(RegExp(r'[A-Z2-9]')),
                   LengthLimitingTextInputFormatter(6),
                 ],
+                onChanged: (_) => setState(() {}),
+                onSubmitted: (v) {
+                  final code = v.trim().toUpperCase();
+                  if (!_busy && code.length == 6) _join(code);
+                },
                 decoration: const InputDecoration(
                   border: OutlineInputBorder(),
                   hintText: 'A1B2C3',

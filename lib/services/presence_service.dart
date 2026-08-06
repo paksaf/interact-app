@@ -35,6 +35,10 @@ class PresenceService {
     _beat = null;
   }
 
+  /// Fire a single immediate heartbeat (e.g. on app resume, so peers see us
+  /// online again without waiting for the next 45s tick). Best-effort.
+  void beatNow() => _api.heartbeat();
+
   /// Refresh the online-map for the given peer keys. Safe to call on list
   /// loads; merges into the cache. Returns the fresh map for convenience.
   Future<Map<String, bool>> refresh(List<String> keys) async {

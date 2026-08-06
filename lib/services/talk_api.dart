@@ -11,6 +11,7 @@
 // shared INTERACT_AUTH_SECRET. See [[sahulat_api_host]] memory.
 import 'dart:convert';
 import 'dart:math';
+import 'package:crypto/crypto.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 
@@ -32,6 +33,69 @@ const _kBase = String.fromEnvironment(
 /// `--dart-define=INTERACT_TURN_CREDENTIAL_URL=https://interactpak.com/api/turn/credential`.
 const kTurnCredentialUrl =
     String.fromEnvironment('INTERACT_TURN_CREDENTIAL_URL', defaultValue: '');
+
+/// CRM name-resolve (Phase 3) hashing scheme versions. The server accepts BOTH
+/// (dual-algo) so older build ≤6040 clients keep working; this client now sends
+/// v2 (HMAC) by default. Must stay byte-identical to the server's
+/// `CRM_RESOLVE_ALGO` / `CRM_RESOLVE_ALGO_V2` in qurbanisahulat
+/// src/lib/crm-shared.ts.
+///
+///   v1 = sha256(pepper + e164)                         (legacy, still accepted)
+///   v2 = HMAC-SHA256(key=pepper, msg=e164)             (preferred, default)
+///
+/// Both digests are lowercase hex, matching Node's `.digest("hex")`.
+const kCrmResolveAlgoV1 = 'sha256-e164-pepper-v1';
+const kCrmResolveAlgoV2 = 'hmac-sha256-pepper-v1';
+
+/// Algo this client hashes + sends. Default v2 (HMAC).
+const kCrmResolveAlgo = kCrmResolveAlgoV2;
+
+/// Shared pepper for the CRM name-resolve hashing scheme. Provisioned via
+/// `--dart-define=CRM_RESOLVE_PEPPER=<value>` and MUST equal the server's
+/// `CRM_RESOLVE_PEPPER` env var. Default EMPTY = feature OFF (resolveCrmNames
+/// short-circuits to an empty map), so behaviour is unchanged until the
+/// operator provisions the pepper. It is NOT a strong secret — it only obscures
+/// numbers in transit; the real protection is JWT + server rate limit +
+/// names-only responses.
+const _kCrmResolvePepper =
+    String.fromEnvironment('CRM_RESOLVE_PEPPER', defaultValue: '');
+
+/// Normalize a raw phone string into E.164, mirroring the server's
+/// `normalizePkPhone` (qurbanisahulat src/lib/phone-normalize.ts) EXACTLY — the
+/// two must agree or the sha256(pepper + e164) hashes won't line up. Returns
+/// null for inputs that don't match a known pattern.
+///
+/// Accepted (all → +923xxxxxxxxx):
+///   03001234567 · 3001234567 · 923001234567 · +923001234567 · +92-300-1234567
+/// Plus generic +CCxxx… pass-through for non-PK numbers (8–15 digits).
+String? normalizePkPhoneClient(String raw) {
+  if (raw.isEmpty) return null;
+  final trimmed = raw.trim();
+  final hasPlus = trimmed.startsWith('+');
+  final digits = trimmed.replaceAll(RegExp(r'[^\d]'), '');
+
+  // Already E.164 PK: +923xxxxxxxxx
+  if (hasPlus && digits.startsWith('92') && digits.length == 12) {
+    return '+$digits';
+  }
+  // 03xxxxxxxxx (PK domestic) → +92 3xxxxxxxxx
+  if (!hasPlus && digits.startsWith('03') && digits.length == 11) {
+    return '+92${digits.substring(1)}';
+  }
+  // 923xxxxxxxxx (PK without +) → +923xxxxxxxxx
+  if (!hasPlus && digits.startsWith('92') && digits.length == 12) {
+    return '+$digits';
+  }
+  // 3xxxxxxxxx (10 digits, missing the leading 0)
+  if (!hasPlus && digits.startsWith('3') && digits.length == 10) {
+    return '+92$digits';
+  }
+  // Generic +CCxxx… pass-through for non-PK numbers (length 8-15)
+  if (hasPlus && digits.length >= 8 && digits.length <= 15) {
+    return '+$digits';
+  }
+  return null;
+}
 
 /// Fetch a short-lived TURN credential and return it as a flutter_webrtc
 /// iceServers map entry. Returns null on ANY failure (endpoint disabled,
@@ -79,9 +143,30 @@ List<dynamic> _extractList(Map<String, dynamic> body) {
   return const <dynamic>[];
 }
 
+/// Unwrap `{ ok, data: {…} }` from Sahulat `ok()` helpers. Falls back to the
+/// body itself when the payload is already flat (older clients / proxies).
+Map<String, dynamic> _extractMap(Map<String, dynamic> body) {
+  final data = body['data'];
+  if (data is Map) return Map<String, dynamic>.from(data);
+  return body;
+}
+
 final talkApiProvider = Provider<TalkApi>((ref) {
   return TalkApi(ref.read(authServiceProvider));
 });
+
+/// Thrown by [TalkApi.transcribeVoiceNote] on a non-2xx from the backend.
+/// Carries the server `error.code` (NO_AUDIO | NOT_CONFIGURED | RATE_LIMITED |
+/// TRANSCRIBE_FAILED) so the caller (TranscriptionService / UI) can show a
+/// precise, fail-soft message. Kept here (low-level) so talk_api.dart has no
+/// upward import of transcription_service.dart.
+class TalkTranscribeError implements Exception {
+  TalkTranscribeError(this.code, this.message);
+  final String code;
+  final String message;
+  @override
+  String toString() => 'TalkTranscribeError($code): $message';
+}
 
 class TalkRoomToken {
   TalkRoomToken({
@@ -97,15 +182,30 @@ class TalkRoomToken {
   final List<Map<String, dynamic>> iceServers;
   final DateTime expiresAt;
 
-  factory TalkRoomToken.fromJson(Map<String, dynamic> j) => TalkRoomToken(
-        token: j['token'] as String,
-        wsUrl: j['wsUrl'] as String,
-        roomId: j['roomId'] as String,
-        iceServers: ((j['iceServers'] as List?) ?? [])
-            .map((e) => Map<String, dynamic>.from(e as Map))
-            .toList(),
-        expiresAt: DateTime.parse(j['expiresAt'] as String),
+  factory TalkRoomToken.fromJson(Map<String, dynamic> j) {
+    final m = _extractMap(j);
+    final token = m['token'] as String?;
+    final wsUrl = (m['wsUrl'] ?? m['url']) as String?;
+    final roomId = m['roomId'] as String?;
+    final expiresRaw = m['expiresAt'];
+    if (token == null || wsUrl == null || roomId == null) {
+      throw FormatException(
+        'TalkRoomToken missing fields: token/wsUrl/roomId '
+        '(keys=${m.keys.toList()})',
       );
+    }
+    return TalkRoomToken(
+      token: token,
+      wsUrl: wsUrl,
+      roomId: roomId,
+      iceServers: ((m['iceServers'] as List?) ?? [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList(),
+      expiresAt: expiresRaw is String
+          ? DateTime.parse(expiresRaw)
+          : DateTime.now().add(const Duration(hours: 1)),
+    );
+  }
 }
 
 class TalkApi {
@@ -171,7 +271,9 @@ class TalkApi {
     if (res.statusCode >= 400) {
       throw Exception('createRoom failed: ${res.statusCode} ${res.body}');
     }
-    return TalkRoomToken.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+    return TalkRoomToken.fromJson(
+      jsonDecode(res.body) as Map<String, dynamic>,
+    );
   }
 
   /// 6-char human-shareable room code — uppercase A–Z + 2–9, minus visually
@@ -265,6 +367,110 @@ class TalkApi {
     }
   }
 
+  /// Resolve display names for [numbers] from the INTERACT CRM (Phase 3),
+  /// WITHOUT the CRM ever reaching the device. We normalize each number to
+  /// E.164, hash it under the v2 scheme `HMAC-SHA256(key=pepper, msg=e164)`
+  /// (byte-identical to the server's `hmac-sha256-pepper-v1`), and POST only
+  /// the hashes to /api/v1/talk/contacts/resolve. The server returns matched
+  /// names keyed by hash; we map them back to the E.164 number.
+  ///
+  /// Returns an `e164 → name` map. Fail-soft: returns `{}` on any error, 404,
+  /// non-200, or when the pepper isn't provisioned (feature off) — the caller
+  /// simply keeps whatever name it already had (device/backend/phone).
+  Future<Map<String, String>> resolveCrmNames(List<String> numbers) async {
+    if (_kCrmResolvePepper.isEmpty || numbers.isEmpty) return const {};
+    // HMAC key = pepper bytes; digest = lowercase hex, matching Node's
+    // crypto.createHmac('sha256', pepper).update(e164).digest('hex').
+    final hmac = Hmac(sha256, utf8.encode(_kCrmResolvePepper));
+    // Build hash → e164 so we can map the server's hash-keyed matches back.
+    final hashToE164 = <String, String>{};
+    for (final n in numbers) {
+      final e164 = normalizePkPhoneClient(n);
+      if (e164 == null) continue;
+      final hash = hmac.convert(utf8.encode(e164)).toString();
+      hashToE164[hash] = e164; // lowercase hex, matches Node digest("hex")
+    }
+    if (hashToE164.isEmpty) return const {};
+
+    // Server caps at 50 hashes/request — chunk to stay within it.
+    const chunkSize = 50;
+    final out = <String, String>{};
+    final allHashes = hashToE164.keys.toList();
+    try {
+      final h = await _headers();
+      for (var i = 0; i < allHashes.length; i += chunkSize) {
+        final chunk = allHashes.sublist(i,
+            i + chunkSize > allHashes.length ? allHashes.length : i + chunkSize);
+        final res = await http
+            .post(
+              Uri.parse('$_kBase/api/v1/talk/contacts/resolve'),
+              headers: h,
+              body: jsonEncode({'hashes': chunk, 'algo': kCrmResolveAlgo}),
+            )
+            .timeout(const Duration(seconds: 8));
+        if (res.statusCode != 200) continue; // 404/429/4xx → skip, fail-soft
+        final body = jsonDecode(res.body) as Map<String, dynamic>;
+        final data = _extractMap(body);
+        final matches = data['matches'];
+        if (matches is! List) continue;
+        for (final m in matches) {
+          if (m is! Map) continue;
+          final hash = m['hash'] as String?;
+          final name = m['name'] as String?;
+          final e164 = hash == null ? null : hashToE164[hash];
+          if (e164 != null && name != null && name.trim().isNotEmpty) {
+            out[e164] = name.trim();
+          }
+        }
+      }
+    } catch (_) {
+      // Fail-soft — whatever we resolved before the error is still returned.
+    }
+    return out;
+  }
+
+  /// Suggest linking a contact / call summary to the INTERACT CRM (admin-
+  /// reviewed). Stores a `TalkCrmSuggestion` server-side and emails admins via
+  /// the Comms Hub. The CRM is READ-ONLY — this never writes it; an admin later
+  /// approves/rejects. Fail-soft: returns false on any error / non-2xx so the
+  /// caller can show a gentle "couldn't submit" message without throwing.
+  ///
+  /// POST /api/v1/talk/crm/suggest
+  ///   { contactName, contactOrg?, note?, summaryText, callId?, summaryId? }
+  ///   → ok({ suggestionId, status:"pending" })
+  Future<bool> suggestToCrm({
+    required String contactName,
+    required String summaryText,
+    String? contactOrg,
+    String? note,
+    String? callId,
+    String? summaryId,
+  }) async {
+    if (contactName.trim().isEmpty || summaryText.trim().isEmpty) return false;
+    try {
+      final h = await _headers();
+      final res = await http
+          .post(
+            Uri.parse('$_kBase/api/v1/talk/crm/suggest'),
+            headers: h,
+            body: jsonEncode({
+              'contactName': contactName.trim(),
+              'summaryText': summaryText.trim(),
+              if (contactOrg != null && contactOrg.trim().isNotEmpty)
+                'contactOrg': contactOrg.trim(),
+              if (note != null && note.trim().isNotEmpty) 'note': note.trim(),
+              if (callId != null && callId.isNotEmpty) 'callId': callId,
+              if (summaryId != null && summaryId.isNotEmpty)
+                'summaryId': summaryId,
+            }),
+          )
+          .timeout(const Duration(seconds: 8));
+      return res.statusCode >= 200 && res.statusCode < 300;
+    } catch (_) {
+      return false; // fail-soft — never surface a network error as a throw
+    }
+  }
+
   /// Call history — reuses CallLog from #186 Phase A. Already live.
   Future<List<Map<String, dynamic>>> callHistory() async {
     final h = await _headers();
@@ -279,5 +485,97 @@ class TalkApi {
     return _extractList(body)
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();
+  }
+
+  /// CLOUD transcription of a voice note at [audioUrl] (the absolute /uploads/…
+  /// URL from ChatApi.uploadMedia). Deepgram runs server-side; this is the
+  /// cloud half of the hybrid fork in [TranscriptionService] (on-device
+  /// whisper.cpp is client-side, later). [language] is a BCP-47 hint (omit to
+  /// auto-detect). [preferOnDevice] is forwarded for a stable contract but the
+  /// server always uses cloud.
+  ///
+  /// POST /api/v1/talk/transcribe { audioUrl, language?, preferOnDevice? }
+  ///   → ok({ text, language, confidence, source:"cloud", durationMs })
+  /// Throws [TalkTranscribeError] on any non-2xx (carrying the server error
+  /// code) so the caller can surface a precise fail-soft message.
+  Future<({
+    String text,
+    String? language,
+    double? confidence,
+    String source,
+    int? durationMs,
+  })> transcribeVoiceNote(
+    String audioUrl, {
+    String? language,
+    bool preferOnDevice = false,
+  }) async {
+    final h = await _headers();
+    final res = await http
+        .post(
+          Uri.parse('$_kBase/api/v1/talk/transcribe'),
+          headers: h,
+          body: jsonEncode({
+            'audioUrl': audioUrl,
+            if (language != null && language.isNotEmpty) 'language': language,
+            'preferOnDevice': preferOnDevice,
+          }),
+        )
+        .timeout(const Duration(seconds: 60));
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      var code = 'TRANSCRIBE_FAILED';
+      var msg = 'Transcription failed (${res.statusCode})';
+      try {
+        final body = jsonDecode(res.body) as Map<String, dynamic>;
+        final e = body['error'];
+        if (e is Map) {
+          if (e['code'] is String) code = e['code'] as String;
+          if (e['message'] is String) msg = e['message'] as String;
+        }
+      } catch (_) {/* keep defaults */}
+      throw TalkTranscribeError(code, msg);
+    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = _extractMap(body);
+    return (
+      text: ((data['text'] as String?) ?? '').trim(),
+      language: data['language'] as String?,
+      confidence: (data['confidence'] as num?)?.toDouble(),
+      source: (data['source'] as String?) ?? 'cloud',
+      durationMs: (data['durationMs'] as num?)?.toInt(),
+    );
+  }
+
+  /// Record 👍/👎 [rating] ("up"|"down") on an AI [feature]
+  /// ("transcription"|"summary") for [itemId]. Fail-soft: returns true on
+  /// success, false on any error — feedback must never disrupt the UI.
+  ///
+  /// POST /api/v1/talk/feedback { feature, itemId, rating, comment?, language? }
+  Future<bool> submitFeedback({
+    required String feature,
+    required String itemId,
+    required String rating,
+    String? comment,
+    String? language,
+  }) async {
+    try {
+      final h = await _headers();
+      final res = await http
+          .post(
+            Uri.parse('$_kBase/api/v1/talk/feedback'),
+            headers: h,
+            body: jsonEncode({
+              'feature': feature,
+              'itemId': itemId,
+              'rating': rating,
+              if (comment != null && comment.trim().isNotEmpty)
+                'comment': comment.trim(),
+              if (language != null && language.isNotEmpty) 'language': language,
+            }),
+          )
+          .timeout(const Duration(seconds: 8));
+      return res.statusCode >= 200 && res.statusCode < 300;
+    } catch (_) {
+      return false; // fail-soft — never surface as a throw
+    }
   }
 }

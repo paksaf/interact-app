@@ -4,13 +4,14 @@
 // backgrounds. A single source of truth (Riverpod) for the user's chosen
 // effect so the pre-call effects picker and the in-call self-view agree.
 //
-// Honest scope (2026-07-26):
+// Scope (2026-07-26):
 //   • Self-view / picker: ML Kit selfie segmentation composites blur/brand BG
 //     in camera_effects_screen.dart (FPS-throttled).
-//   • LiveKit publish: Flutter SDK still lacks web-style TrackProcessors, so
-//     peers receive the raw camera track. Townhall control bar → BG opens the
-//     picker and keeps [cameraEffectProvider] as the single source of truth;
-//     when a native VideoProcessor lands, publish through this same enum.
+//   • LiveKit publish (Android): [VirtualBgTrackProcessor] (livekit_client
+//     TrackProcessor + VideoProcessorOptions, SDK ≥2.6.5) attaches a native
+//     ExternalVideoFrameProcessing compositor so peers receive the composite.
+//   • iOS / web: preference + preview only until custom video-source / insertable
+//     streams land; same [cameraEffectProvider] drives the UI.
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 /// The available background treatments. [asset] is null for none/blur (blur is
@@ -27,7 +28,7 @@ enum CameraEffect {
   final String? asset;
 
   bool get isImage => asset != null;
-  /// True when the user wants a non-passthrough background (preview + future publish).
+  /// True when the user wants a non-passthrough background.
   bool get wantsVirtualBg => this != CameraEffect.none;
 }
 

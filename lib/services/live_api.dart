@@ -23,13 +23,14 @@ const _kTimeout = Duration(seconds: 20);
 
 /// Roles an attendee can request. Host is implied by [LiveApi.token]'s
 /// `asHost` flag and is never passed as a role.
-enum LiveRole { speaker, listener, moderator }
+enum LiveRole { speaker, listener, moderator, pttTalker }
 
 extension LiveRoleWire on LiveRole {
   String get wire => switch (this) {
         LiveRole.speaker => 'speaker',
         LiveRole.listener => 'listener',
         LiveRole.moderator => 'moderator',
+        LiveRole.pttTalker => 'ptt-talker',
       };
 }
 
@@ -45,20 +46,41 @@ class LiveJoin {
     required this.roomCode,
     this.roomId,
     this.expiresAt,
+    this.voiceFirst = true,
+    this.holdToSpeak = false,
   });
 
   final String token;
   final String url; // wss://livekit.interactpak.com
-  final String role; // host | moderator | speaker | listener
+  final String role; // host | moderator | speaker | listener | ptt-talker
   final bool isHost;
   final String roomCode;
   final String? roomId;
   final DateTime? expiresAt;
 
+  /// When true (default), publish mic only on join — camera stays off until
+  /// the user enables it. Bandwidth-friendly for Pakistan / voice townhalls.
+  final bool voiceFirst;
+
+  /// Walkie / PTT mode: start with mic off; UI hold-to-speak enables mic.
+  final bool holdToSpeak;
+
   /// Whether this participant is allowed to publish (camera/mic). Listeners
   /// are subscribe-only; the server's grant enforces it, but we also use
   /// this to skip the publish calls client-side.
   bool get canPublish => role != 'listener';
+
+  LiveJoin copyWith({bool? voiceFirst, bool? holdToSpeak}) => LiveJoin(
+        token: token,
+        url: url,
+        role: role,
+        isHost: isHost,
+        roomCode: roomCode,
+        roomId: roomId,
+        expiresAt: expiresAt,
+        voiceFirst: voiceFirst ?? this.voiceFirst,
+        holdToSpeak: holdToSpeak ?? this.holdToSpeak,
+      );
 
   factory LiveJoin.fromData(Map<String, dynamic> d) => LiveJoin(
         token: d['token'] as String,
@@ -70,6 +92,9 @@ class LiveJoin {
         expiresAt: d['expiresAt'] != null
             ? DateTime.tryParse(d['expiresAt'] as String)
             : null,
+        // Default voice-first; callers may override via copyWith.
+        voiceFirst: (d['voiceFirst'] as bool?) ?? true,
+        holdToSpeak: (d['holdToSpeak'] as bool?) ?? false,
       );
 }
 
@@ -87,6 +112,76 @@ class LiveApi {
       'Content-Type': 'application/json',
       if (t != null) 'Authorization': 'Bearer $t',
     };
+  }
+
+  /// Probe caption-agent via QS proxy. Returns configured=true when Deepgram +
+  /// LiveKit keys are present on the agent.
+  ///
+  /// When the health route is missing on an older QS deploy (404), we return
+  /// [unknown: true] so the UI can still attempt [toggleCaptions] — POST is
+  /// the source of truth and will surface admin/agent errors.
+  Future<({bool agentOk, bool configured, bool unknown})> captionsHealth()
+      async {
+    try {
+      final res = await http
+          .get(
+            Uri.parse('$_kBase/api/v1/talk/live/captions/health'),
+            headers: await _headers(),
+          )
+          .timeout(_kTimeout);
+      if (res.statusCode == 404) {
+        return (agentOk: false, configured: false, unknown: true);
+      }
+      if (res.statusCode >= 400) {
+        return (agentOk: false, configured: false, unknown: false);
+      }
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = (body['data'] as Map<String, dynamic>?) ?? body;
+      return (
+        agentOk: data['agentOk'] == true,
+        configured: data['configured'] == true,
+        unknown: false,
+      );
+    } catch (_) {
+      // Network blip — allow toggle attempt; POST will fail clearly.
+      return (agentOk: false, configured: false, unknown: true);
+    }
+  }
+
+  /// Toggle live in-call captions for [room] (LiveKit room name). The backend
+  /// proxies to the caption-agent. Throws [LiveApiException] with a clear
+  /// operator hint when the agent/keys are down.
+  ///
+  /// [language]: Deepgram code — `en` | `ar` | `ur` | `tr` | `ru` | `es` | `multi`.
+  Future<bool> toggleCaptions(
+    String room,
+    bool on, {
+    String language = 'multi',
+  }) async {
+    try {
+      final res = await http
+          .post(
+            Uri.parse('$_kBase/api/v1/talk/live/captions'),
+            headers: await _headers(),
+            body: jsonEncode({
+              'room': room,
+              'action': on ? 'start' : 'stop',
+              if (on) 'language': language,
+            }),
+          )
+          .timeout(_kTimeout);
+      if (res.statusCode >= 200 && res.statusCode < 300) return true;
+      final hint = switch (res.statusCode) {
+        403 => 'Captions: admin only — ask an INTERACT admin to enable.',
+        502 || 503 => 'Caption agent / Deepgram keys required (ops).',
+        _ => 'Captions unavailable (${res.statusCode}).',
+      };
+      throw LiveApiException(hint);
+    } on LiveApiException {
+      rethrow;
+    } catch (e) {
+      throw LiveApiException('Captions unavailable — check caption-agent.');
+    }
   }
 
   /// Mint a LiveKit join token.

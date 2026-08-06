@@ -14,8 +14,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../services/device_contacts_index.dart';
+import '../../services/location_service.dart';
 import '../../services/talk_api.dart';
+import '../../services/talk_flags.dart';
+import '../../services/voice/voice_commands.dart';
 import '../../utils/chat_formatters.dart';
+import '../../utils/display_name.dart';
+import '../../widgets/branded_app_bar.dart';
 
 class CallsTab extends ConsumerStatefulWidget {
   const CallsTab({super.key});
@@ -26,10 +32,29 @@ class CallsTab extends ConsumerStatefulWidget {
 class _CallsTabState extends ConsumerState<CallsTab> {
   late Future<List<Map<String, dynamic>>> _history;
 
+  // Personalised header subtitle — starts generic, upgrades to
+  // "Good evening · Multan" once location resolves (silently stays generic if
+  // permission is denied). See services/location_service.dart.
+  String _subtitle = 'Voice & video first';
+
   @override
   void initState() {
     super.initState();
     _history = ref.read(talkApiProvider).callHistory();
+    _resolvePlace();
+    // Warm the read-only device-contact index so recent-call rows can show a
+    // real name instead of a generic "Talk 1469" label. Best-effort; a single
+    // rebuild once it's ready. Never prompts, never throws.
+    ref.read(deviceContactsIndexProvider).ensureLoaded().then((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  Future<void> _resolvePlace() async {
+    final loc = ref.read(locationServiceProvider);
+    final info = loc.cached ?? await loc.resolve();
+    if (!mounted || info == null) return;
+    setState(() => _subtitle = info.label);
   }
 
   Future<void> _newMeeting({String mode = 'video'}) async {
@@ -52,10 +77,24 @@ class _CallsTabState extends ConsumerState<CallsTab> {
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
       backgroundColor: Colors.transparent,
-      appBar: AppBar(
-        title: const Text('INTERACT'),
-        centerTitle: false,
+      // Voice assistant lives in the app bar (not a FAB). A bottom-right FAB
+      // sat on top of Recent calls and "bumped" the Calls dashboard on Samsung.
+      appBar: BrandedAppBar(
+        title: 'INTERACT',
+        subtitle: _subtitle,
+        showBrandGlyph: true,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.mic_none),
+            tooltip: 'Voice command',
+            onPressed: () =>
+                VoiceCommands.instance.listenAndDispatch(context, ref),
+          ),
+          IconButton(
+            icon: const Icon(Icons.auto_awesome),
+            tooltip: 'Camera background effects',
+            onPressed: () => context.push('/camera-effects'),
+          ),
           IconButton(
             icon: const Icon(Icons.qr_code_scanner),
             tooltip: 'Scan invite QR',
@@ -65,8 +104,12 @@ class _CallsTabState extends ConsumerState<CallsTab> {
       ),
       body: RefreshIndicator(
         onRefresh: () async {
-          setState(() => _history = ref.read(talkApiProvider).callHistory());
-          await _history;
+          // Block-body setState (arrow form returns the Future → Flutter throws).
+          final f = ref.read(talkApiProvider).callHistory();
+          setState(() {
+            _history = f;
+          });
+          await f;
         },
         child: ListView(
           padding: const EdgeInsets.all(16),
@@ -96,6 +139,14 @@ class _CallsTabState extends ConsumerState<CallsTab> {
               ],
             ),
             const SizedBox(height: 10),
+            // Dial a number / email → resolve peer → ring → 1:1 call.
+            _SecondaryAction(
+              icon: Icons.dialpad_outlined,
+              label: 'Dial a number',
+              subtitle: 'Call by phone number or email',
+              onTap: () => context.push('/dialpad'),
+            ),
+            const SizedBox(height: 10),
             // Secondary "Voice only" tile — picked up by users on patchy
             // connections, no auto-ring yet but mode=voice gets reflected
             // in createRoom + leathx-signaling auth.
@@ -104,6 +155,22 @@ class _CallsTabState extends ConsumerState<CallsTab> {
               label: 'Voice-only meeting',
               subtitle: 'Lower bandwidth — useful on slow networks',
               onTap: () => _newMeeting(mode: 'voice'),
+            ),
+            const SizedBox(height: 10),
+            // Group voice surfaces moved here from the removed Menu tab
+            // (Phase-1 redesign). Reuse the existing TownhallEntryScreen.
+            _SecondaryAction(
+              icon: Icons.groups_2_outlined,
+              label: 'Townhall',
+              subtitle: 'Multi-party conference — host or join with a code',
+              onTap: () => context.push('/townhall'),
+            ),
+            const SizedBox(height: 10),
+            _SecondaryAction(
+              icon: Icons.podcasts_outlined,
+              label: 'Walkie',
+              subtitle: 'Hold-to-speak push-to-talk channel',
+              onTap: () => context.push('/walkie'),
             ),
             const SizedBox(height: 24),
             Row(
@@ -137,6 +204,40 @@ class _CallsTabState extends ConsumerState<CallsTab> {
                   return const Padding(
                     padding: EdgeInsets.all(40),
                     child: Center(child: CircularProgressIndicator()),
+                  );
+                }
+                if (snap.hasError) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 32),
+                    child: Column(
+                      children: [
+                        Icon(Icons.wifi_off, size: 36, color: cs.outline),
+                        const SizedBox(height: 10),
+                        Text(
+                          'Couldn’t load recent calls',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: cs.onSurface,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          '${snap.error}'.replaceFirst('Exception: ', ''),
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 12, color: cs.outline),
+                        ),
+                        const SizedBox(height: 14),
+                        FilledButton.tonal(
+                          onPressed: () {
+                            setState(() {
+                              _history =
+                                  ref.read(talkApiProvider).callHistory();
+                            });
+                          },
+                          child: const Text('Retry'),
+                        ),
+                      ],
+                    ),
                   );
                 }
                 final rows = snap.data ?? const [];
@@ -174,23 +275,35 @@ class _PrimaryAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Material(
-      color: color.withValues(alpha: 0.1),
-      borderRadius: BorderRadius.circular(20),
+      color: cs.surface.withValues(alpha: 0.72),
+      borderRadius: BorderRadius.circular(18),
       child: InkWell(
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(18),
         onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(20),
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.5)),
+          ),
+          padding: const EdgeInsets.all(18),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(icon, color: color, size: 36),
-              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(9),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: color, size: 24),
+              ),
+              const SizedBox(height: 14),
               Text(
                 label,
                 style: const TextStyle(
-                  fontSize: 16,
+                  fontSize: 15,
                   fontWeight: FontWeight.w700,
                 ),
               ),
@@ -199,7 +312,7 @@ class _PrimaryAction extends StatelessWidget {
                 subtitle,
                 style: TextStyle(
                   fontSize: 12,
-                  color: Theme.of(context).colorScheme.outline,
+                  color: cs.outline,
                 ),
               ),
             ],
@@ -267,9 +380,21 @@ class _SecondaryAction extends StatelessWidget {
   }
 }
 
-class _CallRow extends StatelessWidget {
+class _CallRow extends ConsumerWidget {
   const _CallRow({required this.row});
   final Map<String, dynamic> row;
+
+  /// Best-effort peer phone from the call-log row — the shape varies, so try
+  /// the common keys. Null when the log carries no number.
+  String? _peerPhone() {
+    final pp = row['peerPhone'];
+    if (pp is String && pp.isNotEmpty) return pp;
+    final p = row['phone'];
+    if (p is String && p.isNotEmpty) return p;
+    final peer = row['peer'];
+    if (peer is Map && peer['phone'] is String) return peer['phone'] as String;
+    return null;
+  }
 
   /// Direction is one of 'incoming' / 'outgoing' / 'missed' — server
   /// supplies it directly when known; otherwise we infer from
@@ -283,10 +408,16 @@ class _CallRow extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final cs = Theme.of(context).colorScheme;
     final mode = row['mode'] as String? ?? 'video';
-    final peer = row['peerName'] as String? ?? 'Unknown';
+    final phone = _peerPhone();
+    // Prefer a device-book name over the backend's generic "Talk 1469" label.
+    final peer = resolveDisplayName(
+      deviceName: ref.read(deviceContactsIndexProvider).nameFor(phone),
+      backendName: row['peerName'] as String?,
+      phone: phone,
+    );
     final dur = row['durationSec'] as int? ?? 0;
     final dir = _direction();
     final startedAtStr = row['startedAt'] as String?;
@@ -355,8 +486,26 @@ class _CallRow extends StatelessWidget {
         icon: Icon(mode == 'voice' ? Icons.phone : Icons.videocam),
         tooltip: 'Call back',
         onPressed: () {
+          final threadId = row['threadId']?.toString();
+          if (threadId != null && threadId.isNotEmpty) {
+            // Flag-gated 1:1 media surface (LiveKit + captions when
+            // TALK_LK_CALLS on; else P2P '/room'). Code-based dial-back below
+            // stays P2P (shared invite code over the open relay).
+            GoRouter.of(context).push(
+              '${TalkFlags.callRoomPath()}?host=true&mode=$mode&threadId=$threadId',
+            );
+            return;
+          }
           final code = row['roomId']?.toString().split(':').last;
-          if (code == null || code.isEmpty) return;
+          if (code == null || code.isEmpty) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('No call details to dial back'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+            return;
+          }
           GoRouter.of(context).push('/room?code=$code&mode=$mode');
         },
       ),

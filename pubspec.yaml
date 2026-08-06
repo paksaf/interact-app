@@ -1,11 +1,11 @@
 name: interact
 description: "INTERACT — voice/video-first, offline-capable, AI-assisted communication super-app. Free, open-source (AGPLv3), Pakistan-first."
 publish_to: "none"
-version: 0.5.1+2027
+version: 0.5.10+6049
 
 environment:
-  sdk: ^3.5.0
-  flutter: ">=3.22.0"
+  sdk: ^3.6.0
+  flutter: ">=3.27.0"
 
 dependencies:
   flutter:
@@ -33,30 +33,25 @@ dependencies:
   http: ^1.2.0
 
   # ── Realtime ────────────────────────────────────────────────────────
-  # flutter_webrtc 1.4.1 works on the v2 embedding; 0.11.x ships the
-  # removed `Registrar` symbol and fails Gradle. Same line sahulat-app
-  # uses for #186 Phase A meeting rooms.
-  # web_socket_channel ^3.0.3 — needed because flutter_webrtc wants
-  # web:^1.0.0 which conflicts with 2.x's web:^0.5.0 pin.
-  flutter_webrtc: ^1.4.1
+  # Pinned to livekit_client 2.8.1's exact flutter_webrtc 1.4.0 (VideoProcessor
+  # Options fix is in livekit ≥2.6.5; ^1.4.1 resolves to 1.5.x which only
+  # pairs with livekit 2.9.0-dev). Shared native libwebrtc for 1:1 mesh + SFU.
+  flutter_webrtc: 1.4.0
   web_socket_channel: ^3.0.3
 
   # ── Conferences / townhalls (LiveKit SFU) ───────────────────────────
-  # Multi-party path — the flutter_webrtc lines above stay for the 1:1 LAN
-  # mesh (meeting_room_screen.dart). This is the SCALABLE path: the same
-  # SFU ExecOS uses (wss://livekit.interactpak.com), joined via
-  # live_room_screen.dart + livekit_service.dart.
-  # NOTE: livekit_client ships flutter_webrtc in lockstep. If `flutter pub
-  # get` reports a flutter_webrtc conflict, let livekit_client drive the
-  # version (relax the `flutter_webrtc:` pin above to match livekit's
-  # transitive constraint — both layers share one native libwebrtc).
-  livekit_client: ^2.4.0
+  # Multi-party path — flutter_webrtc above also serves the 1:1 LAN mesh
+  # (meeting_room_screen.dart). SFU path: live_room_screen + livekit_service.
+  # 2.8.1: setProcessor() uses VideoProcessorOptions for video tracks.
+  livekit_client: 2.8.1
 
   # ── Phone OTP / sign-in ─────────────────────────────────────────────
   pin_code_fields: ^8.0.1
 
   # ── In-call / read-aloud ────────────────────────────────────────────
   wakelock_plus: ^1.2.0
+  # Nearby mesh keep-alive (Maps donor BackgroundGpsService pattern).
+  flutter_background_service: ^5.0.5
 
   # ── Invite-code scanning + display ──────────────────────────────────
   mobile_scanner: ^5.0.0
@@ -90,6 +85,20 @@ dependencies:
   # for inbound messages outside the open chat. Background/killed-app push is
   # a later FCM add — this covers foreground/recent-background today.
   flutter_local_notifications: ^17.2.3
+
+  # ── Native incoming-call screen (WhatsApp-style, over lock screen) ──
+  # flutter_callkit_incoming shows a NATIVE full-screen incoming call even when
+  # the app is KILLED (Android custom UI / iOS CallKit), plus a native "Missed
+  # call — Call back" notification. Fired from push_service.dart on a
+  # `call_ring` FCM data message — works from the FCM background isolate
+  # (changelog 3.1.0 added the background-message handler; 3.1.1 fixed calls
+  # being silently dropped). 3.1.x requires Dart >=3.0 / Flutter >=3.10
+  # (we are 3.6 / 3.27) and Java 17 (we compile with 17). The plugin ships its
+  # own permissions/services/activities via manifest-merge; only INTERNET is
+  # app-side (already declared). The in-app poll ring (call_signaling →
+  # IncomingCallScreen) stays the FOREGROUND surface — CallKit is only used for
+  # the killed / locked / background path (see callkit_service.dart).
+  flutter_callkit_incoming: ^3.1.1
 
   # ── AI audit log — SHA-256 hashes of prompts/responses ─────────────
   crypto: ^3.0.3
@@ -142,6 +151,14 @@ dependencies:
   image_picker: ^1.1.2
   file_picker: ^8.1.2
 
+  # ── Inline video playback for chat attachments ─────────────────────
+  # Official Flutter plugin. Video message attachments play INSIDE the
+  # app (tap thumbnail → inline VideoPlayer with play/pause) instead of
+  # launching an external browser. 2.9.x targets Flutter >=3.16 / Dart
+  # >=3.3 — compatible with our 3.27 / 3.6 toolchain (do NOT bump to a
+  # version needing a newer SDK). See _InlineVideo in chat_thread_screen.
+  video_player: ^2.9.2
+
   # ── Offline LAN discovery (Phase 1.5) ───────────────────────────────
   # Bonsoir mDNS broadcast/discover. Combined with flutter_webrtc, this
   # enables peer-to-peer audio/video/text without ANY internet —
@@ -161,6 +178,15 @@ dependencies:
   # package:sahl_mesh/sahl_mesh_ble.dart (Flutter-only barrel).
   sahl_mesh:
     path: ../sahl_mesh
+  nearby_service: ^0.2.1
+  # BSD-3 BLE (commercial-safe). Replaces flutter_blue_plus — see
+  # docs/COMMERCIAL_DEPS_AND_RF_PK.md + sahl_mesh/docs/LICENSE_DECISION.md
+  flutter_reactive_ble: ^5.5.0
+  permission_handler: ^11.3.0
+  dio: ^5.11.0
+  open_filex: ^4.7.0
+  speech_to_text: ^7.4.0
+  flutter_tts: ^4.2.5
 
 # `record` 5.x pulls record_linux 0.7.2 which is missing the
 # `startStream` + new `hasPermission` signature added by the

@@ -9,6 +9,8 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../widgets/branded_app_bar.dart';
+
 class MenuTab extends StatelessWidget {
   const MenuTab({super.key});
 
@@ -18,15 +20,28 @@ class MenuTab extends StatelessWidget {
       _Item(Icons.chat_bubble_rounded, 'Chats', () => context.go('/chats')),
       _Item(Icons.groups_2_rounded, 'Townhall',
           () => context.push('/townhall')),
+      _Item(Icons.podcasts_rounded, 'Walkie', () => context.push('/walkie')),
       _Item(Icons.call_rounded, 'Calls', () => context.go('/calls')),
       _Item(Icons.person_add_alt_1, 'Invite', () => context.push('/invite')),
       _Item(Icons.contacts_rounded, 'Contacts',
           () => context.go('/contacts')),
       _Item(Icons.person_rounded, 'Me', () => context.go('/me')),
+      _Item(Icons.blur_on_rounded, 'Camera FX',
+          () => context.push('/camera-effects')),
+      _Item(Icons.lock_open_rounded, 'Approve login',
+          () => context.push('/approve-login')),
+      _Item(Icons.pin_rounded, 'Login codes',
+          () => context.push('/login-codes')),
+      _Item(Icons.qr_code_2_rounded, 'Login QR',
+          () => context.push('/login-qr')),
     ];
     return Scaffold(
       backgroundColor: Colors.transparent,
-      appBar: AppBar(title: const Text('Menu')),
+      appBar: const BrandedAppBar(
+        title: 'Menu',
+        subtitle: 'Everything in one place',
+        showBrandGlyph: true,
+      ),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -70,7 +85,14 @@ class _Card extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(item.icon, size: 36, color: cs.primary),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: cs.primary.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(item.icon, size: 28, color: cs.primary),
+            ),
             const SizedBox(height: 12),
             Text(
               item.label,

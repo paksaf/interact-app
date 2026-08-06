@@ -3,6 +3,8 @@
 // Multi-channel sign-in (Weather / Lifestyle pattern): pick SMS, WhatsApp,
 // or Email first, then enter phone/email and OTP. Fail-safe: never advance
 // to the code screen on decoy / undelivered responses from interactpak.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,15 +13,20 @@ import 'package:pin_code_fields/pin_code_fields.dart';
 
 import '../../services/auth_service.dart';
 import '../../utils/phone_normalize.dart';
+import '../../widgets/in_app_update_banner.dart';
 
 class SignInScreen extends ConsumerStatefulWidget {
   const SignInScreen({
     super.key,
     this.sessionExpired = false,
+    this.sessionRevoked = false,
     this.prefillPhone,
   });
 
   final bool sessionExpired;
+  /// True when the server explicitly revoked this device's session (or the
+  /// user signed out on another device). Distinct copy from [sessionExpired].
+  final bool sessionRevoked;
   final String? prefillPhone;
 
   @override
@@ -47,11 +54,16 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
   @override
   void initState() {
     super.initState();
+    // We've reached sign-in, so consume any pending revoke flag — otherwise the
+    // router's redirect would keep bouncing every navigation back here.
+    AuthService.instance.sessionRevoked.value = false;
     final p = widget.prefillPhone?.trim();
     if (p != null && p.isNotEmpty) {
       _phoneCtrl.text = p;
       _channel = 'sms';
     }
+    // OTA must run pre-auth — most sideload users land here after install.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkForUpdate());
   }
 
   @override
@@ -61,6 +73,11 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
     _codeCtrl.dispose();
     _inputFocus.dispose();
     super.dispose();
+  }
+
+  Future<void> _checkForUpdate() async {
+    await checkAndShowInAppUpdate(context);
+    // Banner UI is owned by InAppUpdateBannerHost below.
   }
 
   String get _channelLabel => switch (_channel) {
@@ -199,19 +216,23 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
       behavior: HitTestBehavior.opaque,
       onTap: _dismissKeyboard,
       child: Scaffold(
-        body: SafeArea(
-          child: Center(
-            child: SingleChildScrollView(
-              keyboardDismissBehavior:
-                  ScrollViewKeyboardDismissBehavior.onDrag,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 400),
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
+        body: Column(
+          children: [
+            const InAppUpdateBannerHost(),
+            Expanded(
+              child: SafeArea(
+                child: Center(
+                  child: SingleChildScrollView(
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 400),
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
                     Icon(Icons.forum_rounded, size: 56, color: cs.primary),
                     const SizedBox(height: 12),
                     Text(
@@ -229,7 +250,7 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
                       textAlign: TextAlign.center,
                       style: TextStyle(color: cs.outline),
                     ),
-                    if (widget.sessionExpired) ...[
+                    if (widget.sessionRevoked || widget.sessionExpired) ...[
                       const SizedBox(height: 12),
                       Container(
                         padding: const EdgeInsets.symmetric(
@@ -239,8 +260,11 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Text(
-                          'Session expired (8h login). Your number is saved — '
-                          'request a new code.',
+                          widget.sessionRevoked
+                              ? 'You were signed out on this device. Your number '
+                                  'is saved — request a new code to sign back in.'
+                              : 'Please sign in to continue. Your number is '
+                                  'saved — just request a new code.',
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             color: cs.onTertiaryContainer,
@@ -462,12 +486,15 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
                       textAlign: TextAlign.center,
                       style: TextStyle(fontSize: 11, color: cs.outline),
                     ),
-                    ],
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
+          ],
         ),
       ),
     );

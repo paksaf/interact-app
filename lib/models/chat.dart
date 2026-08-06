@@ -59,8 +59,10 @@ class ChatThread {
     this.lastMessagePreview,
     this.unreadCount = 0,
     this.avatarUrl,
+    this.lastMessageKind,
     this.peerUserId,
     this.peerHasInteractInstalled,
+    this.disappearingSeconds,
   });
 
   final String id;
@@ -72,6 +74,8 @@ class ChatThread {
   final String? lastMessagePreview;
   final int unreadCount;
   final String? avatarUrl;
+  /// Server `lastMessageKind` when present — drives chat-list preview labels.
+  final String? lastMessageKind;
 
   /// 1:1 peer summary populated by the server when peerPhone matched a
   /// registered user. Null for group threads or threads opened without
@@ -82,8 +86,11 @@ class ChatThread {
   /// who has never used INTERACT — the client surfaces a warning chip
   /// and disables the call buttons in that case (#142).
   final bool? peerHasInteractInstalled;
+  /// Auto-hide messages older than this many seconds (null / 0 = off).
+  final int? disappearingSeconds;
 
   bool get isGroup => subjectType == 'group';
+  bool get isChannel => subjectType == 'channel';
 
   /// True if ANY non-self participant has a live typing cursor (#146).
   /// Returns false when `myUserId` isn't known yet.
@@ -124,8 +131,11 @@ class ChatThread {
       lastMessagePreview: j['lastMessagePreview'] as String?,
       unreadCount: (j['unreadCount'] as num?)?.toInt() ?? 0,
       avatarUrl: j['avatarUrl'] as String?,
+      lastMessageKind: (j['lastMessageKind'] as String?) ??
+          (j['lastKind'] as String?),
       peerUserId: j['peerUserId'] as String?,
       peerHasInteractInstalled: j['peerHasInteractInstalled'] as bool?,
+      disappearingSeconds: (j['disappearingSeconds'] as num?)?.toInt(),
     );
   }
 
@@ -133,6 +143,10 @@ class ChatThread {
     List<ChatThreadParticipant>? participants,
     String? peerUserId,
     bool? peerHasInteractInstalled,
+    int? disappearingSeconds,
+    bool clearDisappearing = false,
+    String? lastMessagePreview,
+    String? lastMessageKind,
   }) {
     return ChatThread(
       id: id,
@@ -141,13 +155,24 @@ class ChatThread {
       title: title,
       participants: participants ?? this.participants,
       lastMessageAt: lastMessageAt,
-      lastMessagePreview: lastMessagePreview,
+      lastMessagePreview: lastMessagePreview ?? this.lastMessagePreview,
       unreadCount: unreadCount,
       avatarUrl: avatarUrl,
+      lastMessageKind: lastMessageKind ?? this.lastMessageKind,
       peerUserId: peerUserId ?? this.peerUserId,
       peerHasInteractInstalled:
           peerHasInteractInstalled ?? this.peerHasInteractInstalled,
+      disappearingSeconds: clearDisappearing
+          ? null
+          : (disappearingSeconds ?? this.disappearingSeconds),
     );
+  }
+
+  /// Whether [sentAt] is still visible under this thread's disappearing timer.
+  bool messageStillVisible(DateTime sentAt) {
+    final sec = disappearingSeconds;
+    if (sec == null || sec <= 0) return true;
+    return DateTime.now().difference(sentAt).inSeconds < sec;
   }
 }
 

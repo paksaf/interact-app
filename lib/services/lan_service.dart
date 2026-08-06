@@ -9,8 +9,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+// unawaited from dart:async
+
 import 'package:bonsoir/bonsoir.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import 'mesh_cloud_bridge.dart';
 
 const _kServiceType = '_interact-lan._tcp';
 
@@ -152,12 +156,15 @@ class LanService {
         if (m['t'] != 'chat') return;
         final from = (m['from'] as String?) ?? '';
         if (from.isEmpty || from == _peerId) return;
+        final body = (m['body'] as String?) ?? '';
         _messagesController.add(LanTextMessage(
           fromPeerId: from,
           fromName: (m['name'] as String?) ?? from,
-          body: (m['body'] as String?) ?? '',
+          body: body,
           at: DateTime.tryParse(m['at'] as String? ?? '') ?? DateTime.now(),
         ));
+        // Bridge talk:-prefixed LAN frames into cloud when online.
+        unawaited(MeshCloudBridge.instance.ingestLanBody(body));
       } catch (_) {/* ignore malformed */}
     });
   }

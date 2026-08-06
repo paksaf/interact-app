@@ -62,6 +62,8 @@ class BrandedAppBar extends StatelessWidget implements PreferredSizeWidget {
               if (subtitle != null)
                 Text(
                   subtitle!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w500,

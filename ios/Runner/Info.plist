@@ -70,5 +70,20 @@
 		<true/>
 		<key>UIViewControllerBasedStatusBarAppearance</key>
 		<false/>
+		<!-- BLE mesh / nearby devices scan -->
+		<key>NSBluetoothAlwaysUsageDescription</key>
+		<string>INTERACT Talk uses Bluetooth to find nearby phones and devices for offline mesh and status.</string>
+		<key>NSBluetoothPeripheralUsageDescription</key>
+		<string>INTERACT Talk uses Bluetooth to find nearby phones and devices for offline mesh and status.</string>
+		<!-- Offline LAN Direct mode — Multipeer Connectivity (nearby_service) -->
+		<key>NSBonjourServices</key>
+		<array>
+			<string>_mp-connection._tcp</string>
+			<string>_interact-lan._tcp</string>
+		</array>
+		<key>NSLocalNetworkUsageDescription</key>
+		<string>INTERACT Talk finds nearby phones on the same Wi‑Fi or via peer-to-peer for offline chat without internet.</string>
+		<key>UIRequiresPersistentWiFi</key>
+		<true/>
 	</dict>
 </plist>

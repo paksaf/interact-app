@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0
 //
 // Offline store-and-forward outbox — ported from Interact Maps OutboxService
-// (2026-07-16 donor). JSON POSTs only; Talk uses this for chat text sends when
-// the device is offline so messages deliver once connectivity returns.
-//
-// Queue key is Talk-specific so Maps and Talk never share a backlog.
+// (2026-07-16 donor). JSON POSTs for text; attachment items use a flush
+// handler that uploads local files then POSTs the message.
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+/// Optional handler for kinds that need more than a JSON POST (e.g. upload).
+typedef OutboxItemHandler = Future<bool> Function(Map<String, dynamic> item);
 
 class OutboxService {
   OutboxService._();
@@ -20,12 +23,15 @@ class OutboxService {
   static const _key = 'talk_outbox_queue_v1';
   static const _maxItems = 200;
   static const _maxAgeMs = 48 * 60 * 60 * 1000; // 48 h
-  static const _flushEvery = Duration(seconds: 60);
+  static const _flushEvery = Duration(seconds: 15);
   static const _postTimeout = Duration(seconds: 8);
 
   Timer? _timer;
   bool _flushing = false;
   final _changed = StreamController<int>.broadcast();
+
+  /// Wired from ChatApi so attachment flush can call uploadMedia + send.
+  OutboxItemHandler? attachmentHandler;
 
   /// Fires with pending count after enqueue/flush.
   Stream<int> get changes => _changed.stream;
@@ -59,6 +65,8 @@ class OutboxService {
     required Map<String, dynamic> body,
     Map<String, String>? headers,
     String kind = 'generic',
+    String? localPath,
+    String? threadId,
   }) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -69,6 +77,8 @@ class OutboxService {
         'body': body,
         if (headers != null && headers.isNotEmpty) 'headers': headers,
         'kind': kind,
+        if (localPath != null) 'localPath': localPath,
+        if (threadId != null) 'threadId': threadId,
         'ts': DateTime.now().millisecondsSinceEpoch,
         'attempts': 0,
       });
@@ -77,6 +87,31 @@ class OutboxService {
     } catch (e) {
       if (kDebugMode) debugPrint('Talk outbox enqueue failed: $e');
     }
+  }
+
+  /// Persist a local attachment for later upload+send when online.
+  Future<void> enqueueAttachment({
+    required String threadId,
+    required File file,
+    String caption = '',
+    Map<String, String>? headers,
+  }) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final outDir = Directory('${dir.path}/talk_outbox_media');
+    if (!await outDir.exists()) await outDir.create(recursive: true);
+    final ext = file.path.contains('.') ? file.path.split('.').last : 'bin';
+    final dest = File(
+      '${outDir.path}/${DateTime.now().microsecondsSinceEpoch}.$ext',
+    );
+    await file.copy(dest.path);
+    await enqueue(
+      url: 'attachment://$threadId',
+      body: {'body': caption, 'attachment': ''},
+      headers: headers,
+      kind: 'chat_attach_local',
+      localPath: dest.path,
+      threadId: threadId,
+    );
   }
 
   Future<int> flush() async {
@@ -89,13 +124,28 @@ class OutboxService {
       final kept = <Map<String, dynamic>>[];
       var sent = 0;
       for (final item in list) {
-        final url = item['url'] as String?;
-        final body = (item['body'] as Map?)?.cast<String, dynamic>();
-        if (url == null || body == null) continue;
-        final headers = (item['headers'] as Map?)?.cast<String, String>();
-        final ok = await _post(url, body, headers);
+        final kind = (item['kind'] as String?) ?? 'generic';
+        var ok = false;
+        if (kind == 'chat_attach_local' && attachmentHandler != null) {
+          ok = await attachmentHandler!(item);
+        } else {
+          final url = item['url'] as String?;
+          final body = (item['body'] as Map?)?.cast<String, dynamic>();
+          if (url == null || body == null || url.startsWith('attachment://')) {
+            kept.add(item);
+            continue;
+          }
+          final headers = (item['headers'] as Map?)?.cast<String, String>();
+          ok = await _post(url, body, headers);
+        }
         if (ok) {
           sent++;
+          final path = item['localPath'] as String?;
+          if (path != null) {
+            try {
+              await File(path).delete();
+            } catch (_) {}
+          }
         } else {
           item['attempts'] = ((item['attempts'] as num?)?.toInt() ?? 0) + 1;
           kept.add(item);

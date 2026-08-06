@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0
 //
-// TownhallEntryScreen — start or join a multi-party conference / townhall.
+// TownhallEntryScreen — start or join a multi-party conference / townhall
+// or a LiveKit PTT (walkie) channel.
 //
 // TV-first: the code field autofocuses, role options are large focusable
 // cards (D-pad friendly), and "Start / Join" pushes into the LiveKit room.
 // Host creates (or revives) the room; Speaker joins two-way; Listener joins
 // receive-only (good for large townhalls — they can still raise a hand).
+// Walkie mode uses hold-to-speak (mic off until PTT pressed).
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -14,7 +16,10 @@ import 'package:go_router/go_router.dart';
 import '../../services/live_api.dart';
 
 class TownhallEntryScreen extends ConsumerStatefulWidget {
-  const TownhallEntryScreen({super.key});
+  const TownhallEntryScreen({super.key, this.mode = 'meeting'});
+
+  /// `meeting` (default townhall) or `ptt` (walkie / hold-to-speak).
+  final String mode;
 
   @override
   ConsumerState<TownhallEntryScreen> createState() =>
@@ -22,9 +27,20 @@ class TownhallEntryScreen extends ConsumerStatefulWidget {
 }
 
 class _TownhallEntryScreenState extends ConsumerState<TownhallEntryScreen> {
-  final _codeCtrl = TextEditingController();
+  late final TextEditingController _codeCtrl;
   bool _asHost = false;
   LiveRole _role = LiveRole.speaker;
+
+  bool get _isPtt => widget.mode == 'ptt';
+
+  @override
+  void initState() {
+    super.initState();
+    if (_isPtt) _role = LiveRole.pttTalker;
+    // Prefill so Host → Start works without retyping. Hint-only "TOWN42"
+    // looked filled on phones but `_codeCtrl` was empty (snackbar 3+ chars).
+    _codeCtrl = TextEditingController(text: _isPtt ? 'WALKIE1' : 'TOWN42');
+  }
 
   @override
   void dispose() {
@@ -40,8 +56,11 @@ class _TownhallEntryScreenState extends ConsumerState<TownhallEntryScreen> {
       );
       return;
     }
+    final role = _asHost
+        ? (_isPtt ? LiveRole.pttTalker : LiveRole.moderator)
+        : _role;
     context.push(
-      '/live?code=$code&host=$_asHost&role=${_role.wire}',
+      '/live?code=$code&host=$_asHost&role=${role.wire}&mode=${widget.mode}',
     );
   }
 
@@ -49,7 +68,9 @@ class _TownhallEntryScreenState extends ConsumerState<TownhallEntryScreen> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('Conference / Townhall')),
+      appBar: AppBar(
+        title: Text(_isPtt ? 'Walkie channel' : 'Conference / Townhall'),
+      ),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -60,17 +81,24 @@ class _TownhallEntryScreenState extends ConsumerState<TownhallEntryScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Icon(Icons.groups_2, size: 56, color: cs.primary),
+                  Icon(
+                    _isPtt ? Icons.podcasts : Icons.groups_2,
+                    size: 56,
+                    color: cs.primary,
+                  ),
                   const SizedBox(height: 12),
                   Text(
-                    'Join a live room',
+                    _isPtt ? 'Push-to-talk channel' : 'Join a live room',
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.headlineSmall,
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Enter the room code shared by the host. The same code '
-                    'works across every INTERACT app and ExecOS.',
+                    _isPtt
+                        ? 'Hold the talk button to speak. Uses LiveKit SFU '
+                            '(same stack as townhall). BLE mesh voice is a later phase.'
+                        : 'Enter the room code shared by the host. The same code '
+                            'works across every INTERACT app and ExecOS.',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: cs.outline),
                   ),
@@ -81,16 +109,20 @@ class _TownhallEntryScreenState extends ConsumerState<TownhallEntryScreen> {
                     textCapitalization: TextCapitalization.characters,
                     textAlign: TextAlign.center,
                     style: const TextStyle(
-                        fontSize: 26, fontWeight: FontWeight.bold, letterSpacing: 6),
+                        fontSize: 26,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 6),
                     inputFormatters: [
                       UpperCaseFormatter(),
                       FilteringTextInputFormatter.allow(RegExp(r'[A-Z0-9-]')),
                       LengthLimitingTextInputFormatter(32),
                     ],
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: 'Room code',
-                      hintText: 'TOWN42',
-                      border: OutlineInputBorder(),
+                      // Hint only when user clears the prefilled default.
+                      hintText: _isPtt ? 'e.g. WALKIE1' : 'e.g. TOWN42',
+                      helperText: 'Edit or keep the default code, then Start',
+                      border: const OutlineInputBorder(),
                     ),
                     onSubmitted: (_) => _start(),
                   ),
@@ -104,31 +136,52 @@ class _TownhallEntryScreenState extends ConsumerState<TownhallEntryScreen> {
                         title: 'Host',
                         subtitle: 'Start the room',
                         selected: _asHost,
-                        onTap: () => setState(() {
-                          _asHost = true;
-                          _role = LiveRole.moderator;
-                        }),
+                        onTap: () {
+                          FocusManager.instance.primaryFocus?.unfocus();
+                          setState(() {
+                            _asHost = true;
+                            _role = _isPtt
+                                ? LiveRole.pttTalker
+                                : LiveRole.moderator;
+                          });
+                        },
                       ),
-                      _RoleCard(
-                        icon: Icons.videocam,
-                        title: 'Speaker',
-                        subtitle: 'Camera + mic',
-                        selected: !_asHost && _role == LiveRole.speaker,
-                        onTap: () => setState(() {
-                          _asHost = false;
-                          _role = LiveRole.speaker;
-                        }),
-                      ),
-                      _RoleCard(
-                        icon: Icons.hearing,
-                        title: 'Listener',
-                        subtitle: 'Watch + raise hand',
-                        selected: !_asHost && _role == LiveRole.listener,
-                        onTap: () => setState(() {
-                          _asHost = false;
-                          _role = LiveRole.listener;
-                        }),
-                      ),
+                      if (_isPtt)
+                        _RoleCard(
+                          icon: Icons.mic,
+                          title: 'Talker',
+                          subtitle: 'Hold to speak',
+                          selected: !_asHost && _role == LiveRole.pttTalker,
+                          onTap: () {
+                            FocusManager.instance.primaryFocus?.unfocus();
+                            setState(() {
+                              _asHost = false;
+                              _role = LiveRole.pttTalker;
+                            });
+                          },
+                        )
+                      else ...[
+                        _RoleCard(
+                          icon: Icons.mic,
+                          title: 'Speaker',
+                          subtitle: 'Mic first · cam optional',
+                          selected: !_asHost && _role == LiveRole.speaker,
+                          onTap: () => setState(() {
+                            _asHost = false;
+                            _role = LiveRole.speaker;
+                          }),
+                        ),
+                        _RoleCard(
+                          icon: Icons.hearing,
+                          title: 'Listener',
+                          subtitle: 'Watch + raise hand',
+                          selected: !_asHost && _role == LiveRole.listener,
+                          onTap: () => setState(() {
+                            _asHost = false;
+                            _role = LiveRole.listener;
+                          }),
+                        ),
+                      ],
                     ],
                   ),
                   const SizedBox(height: 28),
@@ -181,34 +234,36 @@ class _RoleCard extends StatelessWidget {
     return Expanded(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4),
-        child: InkWell(
+        child: Material(
+          color: selected
+              ? cs.primaryContainer
+              : cs.surfaceContainerHighest,
           borderRadius: BorderRadius.circular(12),
-          onTap: onTap,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 120),
-            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
-            decoration: BoxDecoration(
-              color: selected ? cs.primaryContainer : cs.surfaceContainerHigh,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: selected ? cs.primary : cs.outlineVariant,
-                width: selected ? 2 : 0.5,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+              child: Column(
+                children: [
+                  Icon(icon,
+                      color: selected ? cs.onPrimaryContainer : cs.onSurface),
+                  const SizedBox(height: 6),
+                  Text(title,
+                      style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: selected
+                              ? cs.onPrimaryContainer
+                              : cs.onSurface)),
+                  Text(subtitle,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                          fontSize: 11,
+                          color: selected
+                              ? cs.onPrimaryContainer.withValues(alpha: 0.8)
+                              : cs.outline)),
+                ],
               ),
-            ),
-            child: Column(
-              children: [
-                Icon(icon,
-                    color: selected ? cs.primary : cs.onSurfaceVariant, size: 28),
-                const SizedBox(height: 8),
-                Text(title,
-                    style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: selected ? cs.onPrimaryContainer : null)),
-                const SizedBox(height: 2),
-                Text(subtitle,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 11, color: cs.outline)),
-              ],
             ),
           ),
         ),

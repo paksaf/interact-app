@@ -9,9 +9,14 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:sahl_mesh/sahl_mesh.dart';
 import 'package:sahl_mesh/sahl_mesh_ble.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
+import '../../services/chat_api.dart';
+import '../../services/mesh_cloud_bridge.dart';
+import '../../services/mesh_foreground_service.dart';
 import '../../widgets/branded_app_bar.dart';
 
 class NearbyMeshScreen extends ConsumerStatefulWidget {
@@ -36,19 +41,33 @@ class _NearbyMeshScreenState extends ConsumerState<NearbyMeshScreen> {
 
   Future<void> _boot() async {
     try {
+      // Explicit runtime perms before sahl_mesh (field-test harden P0).
+      await [
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+        Permission.bluetoothAdvertise,
+        Permission.locationWhenInUse,
+      ].request();
+      await WakelockPlus.enable();
+      await MeshForegroundService.instance.start();
+
       final id = await MeshIdentity.generate();
       final node = MeshNode(
-        transport: BleTransport(),
+        transport: BleTransport(
+          config: const BleTransportConfig(throwOnPermissionDenied: true),
+        ),
         identity: id,
       );
       await node.start();
-      _sub = node.messages.listen((msg) {
+      MeshCloudBridge.instance.bind(ref.read(chatApiProvider));
+      _sub = node.messages.listen((msg) async {
         if (msg.kind != MeshMessageKind.hello) return;
         final raw = utf8.decode(msg.payload, allowMalformed: true);
         if (!raw.startsWith('talk:')) return;
         final body = raw.substring(5);
+        final bridged = await MeshCloudBridge.instance.ingestTalkFrame(raw);
         if (!mounted) return;
-        setState(() => _log.add('← $body'));
+        setState(() => _log.add(bridged ? '←☁ $body' : '← $body'));
       });
       setState(() {
         _node = node;
@@ -90,6 +109,8 @@ class _NearbyMeshScreenState extends ConsumerState<NearbyMeshScreen> {
   void dispose() {
     _sub?.cancel();
     _node?.stop();
+    unawaited(MeshForegroundService.instance.stop());
+    unawaited(WakelockPlus.disable());
     _textCtrl.dispose();
     super.dispose();
   }
@@ -118,7 +139,8 @@ class _NearbyMeshScreenState extends ConsumerState<NearbyMeshScreen> {
                       title: Text('sahl_mesh gossip'),
                       subtitle: Text(
                         'Short texts hop phone-to-phone over BLE. '
-                        'No internet. Range ~tens of metres.',
+                        'No internet. Keep this screen open (FG keep-alive). '
+                        'Field: RF-BLE-1 @1m, RF-BLE-2 @50m, RF-BLE-3 3 phones.',
                       ),
                     ),
                     const Divider(height: 1),

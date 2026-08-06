@@ -25,6 +25,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_mlkit_selfie_segmentation/google_mlkit_selfie_segmentation.dart';
 
 import '../../services/camera_effects.dart';
+import '../../services/talk_camera_gate.dart';
 import '../../widgets/branded_app_bar.dart';
 
 class CameraEffectsScreen extends ConsumerStatefulWidget {
@@ -34,8 +35,10 @@ class CameraEffectsScreen extends ConsumerStatefulWidget {
       _CameraEffectsScreenState();
 }
 
-class _CameraEffectsScreenState extends ConsumerState<CameraEffectsScreen> {
+class _CameraEffectsScreenState extends ConsumerState<CameraEffectsScreen>
+    with WidgetsBindingObserver {
   CameraController? _controller;
+  CameraDescription? _frontCam;
   final _segmenter = SelfieSegmenter(
     mode: SegmenterMode.stream,
     enableRawSizeMask: true,
@@ -55,11 +58,41 @@ class _CameraEffectsScreenState extends ConsumerState<CameraEffectsScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _start();
+  }
+
+  Future<void> _releaseForGate() async {
+    final c = _controller;
+    _controller = null;
+    await _safeDispose(c);
+    if (mounted) {
+      setState(() {
+        _frameImage = null;
+        _maskImage = null;
+      });
+    }
+  }
+
+  /// Disposes a controller, swallowing Camerax teardown races (Maps donor).
+  Future<void> _safeDispose(CameraController? c) async {
+    if (c == null) return;
+    try {
+      if (c.value.isStreamingImages) {
+        await c.stopImageStream();
+      }
+    } catch (_) {/* ignore */}
+    try {
+      await c.dispose();
+    } catch (_) {
+      // releaseFlutterSurfaceTexture before preview init — safe to ignore.
+    }
   }
 
   Future<void> _start() async {
     try {
+      await TalkCameraGate.releaseIfHeld();
+      TalkCameraGate.releaseLocalCamera = _releaseForGate;
       final cams = await availableCameras();
       CameraDescription? front;
       for (final c in cams) {
@@ -73,21 +106,54 @@ class _CameraEffectsScreenState extends ConsumerState<CameraEffectsScreen> {
         setState(() => _error = 'No camera available');
         return;
       }
-      final controller = CameraController(
-        front,
-        ResolutionPreset.low,
-        enableAudio: false,
-        imageFormatGroup: defaultTargetPlatform == TargetPlatform.android
-            ? ImageFormatGroup.nv21
-            : ImageFormatGroup.bgra8888,
-      );
-      await controller.initialize();
-      if (!mounted) return;
-      _controller = controller;
-      await controller.startImageStream(_onImage);
-      setState(() {});
+      _frontCam = front;
+      await _openController(front);
     } catch (e) {
       if (mounted) setState(() => _error = 'Camera error: $e');
+    }
+  }
+
+  Future<void> _openController(CameraDescription front) async {
+    final previous = _controller;
+    _controller = null;
+    await _safeDispose(previous);
+    final controller = CameraController(
+      front,
+      ResolutionPreset.low,
+      enableAudio: false,
+      imageFormatGroup: defaultTargetPlatform == TargetPlatform.android
+          ? ImageFormatGroup.nv21
+          : ImageFormatGroup.bgra8888,
+    );
+    try {
+      await controller.initialize();
+      if (!mounted) {
+        await _safeDispose(controller);
+        return;
+      }
+      _controller = controller;
+      await controller.startImageStream(_onImage);
+      setState(() => _error = null);
+    } catch (e) {
+      await _safeDispose(controller);
+      if (mounted) setState(() => _error = 'Camera error: $e');
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Maps camera_screen: release on inactive so LiveKit / OS can reclaim;
+    // reopen on resume when still on this screen.
+    if (state == AppLifecycleState.inactive) {
+      final c = _controller;
+      _controller = null;
+      _safeDispose(c);
+    } else if (state == AppLifecycleState.resumed) {
+      final cam = _frontCam;
+      if (cam != null && _controller == null) {
+        TalkCameraGate.releaseLocalCamera = _releaseForGate;
+        _openController(cam);
+      }
     }
   }
 
@@ -233,8 +299,13 @@ class _CameraEffectsScreenState extends ConsumerState<CameraEffectsScreen> {
 
   @override
   void dispose() {
-    _controller?.stopImageStream().catchError((_) {});
-    _controller?.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    if (identical(TalkCameraGate.releaseLocalCamera, _releaseForGate)) {
+      TalkCameraGate.releaseLocalCamera = null;
+    }
+    final c = _controller;
+    _controller = null;
+    _safeDispose(c);
     _segmenter.close();
     super.dispose();
   }

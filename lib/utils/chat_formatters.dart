@@ -25,15 +25,15 @@ String relTime(DateTime t) {
   if (dayDiff == 0) return _hm(t);
   if (dayDiff == 1) return 'Yesterday';
   if (dayDiff < 7) return _weekdayShort(t.weekday);
-  return '${t.year}-${_2(t.month)}-${_2(t.day)}';
+  return '${t.year}-${_pad2(t.month)}-${_pad2(t.day)}';
 }
 
 /// HH:mm in 24-hour format. Used in message bubble timestamps.
 String hm(DateTime t) => _hm(t);
 
-String _hm(DateTime t) => '${_2(t.hour)}:${_2(t.minute)}';
+String _hm(DateTime t) => '${_pad2(t.hour)}:${_pad2(t.minute)}';
 
-String _2(int n) => n.toString().padLeft(2, '0');
+String _pad2(int n) => n.toString().padLeft(2, '0');
 
 String _weekdayShort(int weekday) {
   // DateTime.weekday: 1=Mon ... 7=Sun
@@ -76,9 +76,19 @@ String daySeparator(DateTime t) {
 String messagePreview({
   String? preview,
   MessageKind? lastKind,
+  String? lastKindRaw,
 }) {
-  if (preview != null && preview.trim().isNotEmpty) return preview;
-  switch (lastKind) {
+  final kind = lastKind ?? _kindFromRaw(lastKindRaw);
+  final p = preview?.trim() ?? '';
+  if (p.isNotEmpty) {
+    final lower = p.toLowerCase();
+    if (lower == 'video' || lower == 'video call') return '📹 Video call';
+    if (lower == 'voice' || lower == 'voice call' || lower == 'audio') {
+      return '📞 Voice call';
+    }
+    return p;
+  }
+  switch (kind) {
     case MessageKind.voice:
       return '🎤 Voice message';
     case MessageKind.image:
@@ -86,10 +96,30 @@ String messagePreview({
     case MessageKind.file:
       return '📎 Attachment';
     case MessageKind.system:
-      return '— system —';
+      return 'System update';
     case MessageKind.text:
     case null:
-      return '—';
+      return 'Tap to open';
+  }
+}
+
+MessageKind? _kindFromRaw(String? raw) {
+  switch ((raw ?? '').toLowerCase()) {
+    case 'voice':
+      return MessageKind.voice;
+    case 'image':
+    case 'photo':
+      return MessageKind.image;
+    case 'file':
+    case 'document':
+      return MessageKind.file;
+    case 'system':
+    case 'call':
+      return MessageKind.system;
+    case 'text':
+      return MessageKind.text;
+    default:
+      return null;
   }
 }
 

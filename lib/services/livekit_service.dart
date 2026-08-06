@@ -19,7 +19,10 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:livekit_client/livekit_client.dart';
 
+import 'camera_effects.dart';
 import 'live_api.dart';
+import 'talk_camera_gate.dart';
+import 'virtual_bg_processor.dart';
 
 /// One renderable participant cell in the grid.
 class LiveTile {
@@ -163,6 +166,12 @@ class LiveRoomController extends ChangeNotifier {
         roomOptions: const RoomOptions(
           adaptiveStream: true,
           dynacast: true,
+          // Townhall TV polish — WebRTC DSP (echo / noise / AGC).
+          defaultAudioCaptureOptions: AudioCaptureOptions(
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          ),
         ),
       );
       _room = room;
@@ -175,14 +184,23 @@ class LiveRoomController extends ChangeNotifier {
 
       await room.connect(join.url, join.token);
 
-      // Full two-way: publish camera + mic unless we joined as a listener.
+      // Voice-first: mic on, camera off unless video requested.
+      // PTT / hold-to-speak: mic starts off until the walkie button is held.
+      // Listeners publish neither.
       if (join.canPublish) {
         final lp = room.localParticipant;
         if (lp != null) {
-          await lp.setCameraEnabled(true);
-          await lp.setMicrophoneEnabled(true);
-          _camOn = true;
-          _micOn = true;
+          final cam = !join.voiceFirst && !join.holdToSpeak;
+          final mic = !join.holdToSpeak;
+          if (cam) await TalkCameraGate.releaseIfHeld();
+          await lp.setMicrophoneEnabled(mic);
+          await lp.setCameraEnabled(cam);
+          _micOn = mic;
+          _camOn = cam;
+          TalkCameraGate.livekitCameraPublishing = cam;
+          if (cam && _cameraEffect != CameraEffect.none) {
+            await applyCameraEffect(_cameraEffect);
+          }
         }
       }
 
@@ -200,6 +218,7 @@ class LiveRoomController extends ChangeNotifier {
   Future<void> leave() async {
     _leaving = true; // distinguishes intentional leave from a dropped link
     try {
+      TalkCameraGate.livekitCameraPublishing = false;
       await _room?.localParticipant?.setCameraEnabled(false);
       await _room?.localParticipant?.setMicrophoneEnabled(false);
     } catch (_) {/* best effort */}
@@ -236,16 +255,70 @@ class LiveRoomController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Walkie / PTT: hold → mic on, release → mic off.
+  Future<void> setMicEnabled(bool on) async {
+    final lp = _room?.localParticipant;
+    if (lp == null) return;
+    if (_micOn == on) return;
+    _micOn = on;
+    await lp.setMicrophoneEnabled(on);
+    notifyListeners();
+  }
+
   Future<void> toggleCamera() async {
     final lp = _room?.localParticipant;
     if (lp == null) return;
+    // Release any CameraController (effects / chat capture) before LiveKit
+    // claims the hardware — Maps DashcamCameraGate pattern.
+    if (!_camOn) {
+      await TalkCameraGate.releaseIfHeld();
+    }
     _camOn = !_camOn;
+    TalkCameraGate.livekitCameraPublishing = _camOn;
     await lp.setCameraEnabled(_camOn);
+    if (_camOn && _cameraEffect != CameraEffect.none) {
+      await applyCameraEffect(_cameraEffect);
+    }
+    notifyListeners();
+  }
+
+  /// Attach / update LiveKit [VirtualBgTrackProcessor] for [effect].
+  /// Android composites into the published track; other platforms keep the
+  /// preference for preview UI only.
+  Future<void> applyCameraEffect(CameraEffect effect) async {
+    _cameraEffect = effect;
+    final track = _localVideoTrack();
+    if (track == null) {
+      notifyListeners();
+      return;
+    }
+
+    final existing = track.processor;
+    if (existing is VirtualBgTrackProcessor) {
+      await existing.updateEffect(effect);
+      notifyListeners();
+      return;
+    }
+
+    if (effect == CameraEffect.none) {
+      notifyListeners();
+      return;
+    }
+
+    try {
+      await track.setProcessor(VirtualBgTrackProcessor(effect));
+    } catch (e) {
+      debugPrint('applyCameraEffect failed: $e');
+      _error = 'Virtual background failed: $e';
+    }
     notifyListeners();
   }
 
   bool _screenSharing = false;
   bool get screenSharing => _screenSharing;
+
+  CameraEffect _cameraEffect = CameraEffect.none;
+  CameraEffect get cameraEffect => _cameraEffect;
 
   /// Publish / stop local screen share (Android MediaProjection / iOS ReplayKit).
   Future<void> toggleScreenShare() async {
@@ -274,6 +347,10 @@ class LiveRoomController extends ChangeNotifier {
       await track.setCameraPosition(
         _frontCamera ? CameraPosition.front : CameraPosition.back,
       );
+      // Camera switch often recreates the capturer — re-bind processor.
+      if (_cameraEffect != CameraEffect.none) {
+        await applyCameraEffect(_cameraEffect);
+      }
     } catch (_) {/* some TVs have a single camera */}
     notifyListeners();
   }
@@ -380,10 +457,11 @@ class LiveRoomController extends ChangeNotifier {
     if (lp == null) return;
     try {
       if (canPublish) {
+        // Keep voice-first when a host promotes a listener → speaker.
         await lp.setMicrophoneEnabled(true);
-        await lp.setCameraEnabled(true);
+        await lp.setCameraEnabled(false);
         _micOn = true;
-        _camOn = true;
+        _camOn = false;
         _role = 'speaker';
       } else {
         await lp.setMicrophoneEnabled(false);

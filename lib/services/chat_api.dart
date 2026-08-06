@@ -138,8 +138,36 @@ class InviteQuotaExhausted implements Exception {
 }
 
 class ChatApi {
-  ChatApi(this._auth);
+  ChatApi(this._auth) {
+    // Attachment outbox flush: upload local file → POST message with URL.
+    OutboxService.instance.attachmentHandler = _flushAttachmentItem;
+  }
   final AuthService _auth;
+
+  Future<bool> _flushAttachmentItem(Map<String, dynamic> item) async {
+    final path = item['localPath'] as String?;
+    final threadId = item['threadId'] as String?;
+    if (path == null || threadId == null) return false;
+    final file = File(path);
+    if (!await file.exists()) return true; // drop orphan
+    try {
+      final up = await uploadMedia(file);
+      final caption =
+          ((item['body'] as Map?)?['body'] as String?)?.trim() ?? '';
+      final url = '$_kBase/api/v1/chat/threads/$threadId/messages';
+      final headers = await _headers();
+      final res = await http
+          .post(
+            Uri.parse(url),
+            headers: headers,
+            body: jsonEncode({'body': caption, 'attachment': up.url}),
+          )
+          .timeout(const Duration(seconds: 20));
+      return res.statusCode >= 200 && res.statusCode < 300;
+    } catch (_) {
+      return false;
+    }
+  }
 
   Future<Map<String, String>> _headers() async {
     final t = await _auth.token();
@@ -200,7 +228,7 @@ class ChatApi {
   }
 
   /// List threads — INTERACT default filter is 'general' (1:1 personal).
-  /// Pass `subjectType: 'group'` to fetch group rooms instead.
+  /// Pass `subjectType: 'group'` / `'channel'` for those rooms.
   Future<List<ChatThread>> listThreads({String subjectType = 'general'}) async {
     final h = await _headers();
     final res = await http.get(
@@ -215,6 +243,25 @@ class ChatApi {
         .whereType<Map<String, dynamic>>()
         .map(ChatThread.fromJson)
         .toList();
+  }
+
+  /// Merge 1:1 + group + channel threads (newest activity first).
+  /// Best-effort per type so a missing channel route doesn't blank chats.
+  Future<List<ChatThread>> listAllThreads() async {
+    final results = await Future.wait([
+      listThreads(subjectType: 'general'),
+      listThreads(subjectType: 'group').catchError((_) => <ChatThread>[]),
+      listThreads(subjectType: 'channel').catchError((_) => <ChatThread>[]),
+    ]);
+    final byId = <String, ChatThread>{};
+    for (final list in results) {
+      for (final t in list) {
+        byId[t.id] = t;
+      }
+    }
+    final merged = byId.values.toList()
+      ..sort((a, b) => b.lastMessageAt.compareTo(a.lastMessageAt));
+    return merged;
   }
 
   /// Create a new direct thread with the given peer phone (E.164 or
@@ -441,27 +488,10 @@ class ChatApi {
     });
   }
 
-  /// Best-effort voice transcription. Posts the audio to Talk's STT route;
-  /// returns null when the server has no STT configured (creds-gated).
-  Future<String?> transcribeVoiceNote(File file) async {
-    try {
-      final t = await _auth.token();
-      final req = http.MultipartRequest(
-        'POST',
-        Uri.parse('$_kBase/api/v1/talk/transcribe'),
-      );
-      if (t != null) req.headers['Authorization'] = 'Bearer $t';
-      req.files.add(await http.MultipartFile.fromPath('file', file.path));
-      final res = await http.Response.fromStream(await req.send());
-      if (res.statusCode >= 400) return null;
-      final body = jsonDecode(res.body) as Map<String, dynamic>;
-      final data = (body['data'] ?? body) as Map<String, dynamic>;
-      final text = (data['text'] as String?)?.trim();
-      return (text == null || text.isEmpty) ? null : text;
-    } catch (_) {
-      return null;
-    }
-  }
+  // NOTE: voice-note transcription moved to an ON-DEMAND cloud flow —
+  // TalkApi.transcribeVoiceNote(audioUrl) + TranscriptionService (Deepgram via
+  // /api/v1/talk/transcribe, JSON audioUrl). The old send-time multipart-File
+  // STT helper was removed with that route change.
 
   /// Upload a file (image/video/audio/document) to the media endpoint and
   /// return its ABSOLUTE url + resolved mediaType. The backend caps images at
@@ -499,6 +529,27 @@ class ChatApi {
   }) async {
     return _send(threadId,
         body: {'body': caption, 'attachment': url}, logTag: 'sendAttachment');
+  }
+
+  /// Queue a local file for upload+send when connectivity returns.
+  Future<Message> queueAttachment(
+    String threadId,
+    File file, {
+    String caption = '',
+  }) async {
+    final headers = await _headers();
+    await OutboxService.instance.enqueueAttachment(
+      threadId: threadId,
+      file: file,
+      caption: caption,
+      headers: headers,
+    );
+    final myUserId = await _auth.localUserId() ?? await _auth.phone() ?? '';
+    return _pendingLocal(
+      threadId,
+      {'body': caption.isEmpty ? '📎 Attachment' : caption, 'attachment': file.path},
+      myUserId,
+    );
   }
 
   /// Mark a thread read up to a given message.
@@ -578,16 +629,41 @@ class ChatApi {
     Map<String, dynamic> body,
     String myUserId,
   ) {
+    final attach = body['attachment'] as String?;
+    final hasAttach = attach != null && attach.isNotEmpty;
+    MessageKind kind = MessageKind.text;
+    if (hasAttach) {
+      final lower = attach.toLowerCase();
+      if (lower.contains('.mp4') ||
+          lower.contains('.mov') ||
+          lower.contains('video')) {
+        kind = MessageKind.file;
+      } else if (lower.contains('.m4a') ||
+          lower.contains('.aac') ||
+          lower.contains('.mp3') ||
+          lower.contains('audio')) {
+        kind = MessageKind.voice;
+      } else if (lower.contains('.png') ||
+          lower.contains('.jpg') ||
+          lower.contains('.jpeg') ||
+          lower.contains('.webp') ||
+          lower.contains('image')) {
+        kind = MessageKind.image;
+      } else {
+        kind = MessageKind.file;
+      }
+    }
     return Message(
       id: 'pending-${DateTime.now().microsecondsSinceEpoch}',
       threadId: threadId,
       senderId: myUserId,
       senderName: 'You',
-      kind: MessageKind.text,
+      kind: kind,
       body: (body['body'] as String?) ?? '',
       sentAt: DateTime.now(),
       isMine: true,
       pending: true,
+      mediaUrl: hasAttach && !attach.startsWith('/') ? attach : null,
       replyToId: body['replyToId'] as String?,
     );
   }
@@ -799,8 +875,14 @@ class ChatApi {
       body: jsonEncode({'title': title}),
     );
     if (res.statusCode >= 400) throw Exception('createChannel failed: ${res.statusCode}');
-    final data = _extractObject(jsonDecode(res.body) as Map<String, dynamic>);
-    return ChatThread.fromJson(data['thread'] as Map<String, dynamic>);
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    await _captureMeFromBody(body);
+    // Same peel as createGroup — envelope may be {thread:{…}} or the thread itself.
+    final data = (body['data'] ?? body) as Map<String, dynamic>;
+    final th = (data['thread'] is Map<String, dynamic>)
+        ? data['thread'] as Map<String, dynamic>
+        : data;
+    return ChatThread.fromJson(th);
   }
 
   /// Create a community (group-of-groups). Returns its id.

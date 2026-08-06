@@ -42,6 +42,20 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // Gotcha #67 (2026-07-31): an arm64-only APK installs on 32-bit phones
+        // (Redmi / Phone B) but splash→closes — no libflutter.so for armeabi-v7a.
+        // Pin BOTH phone ABIs so `flutter build apk --release` always ships a
+        // fat APK safe for OTA + Wi‑Fi sideload. Omit when SPLIT_PER_ABI=1
+        // (or Flutter --split-per-abi) — abiFilters conflict with ABI splits.
+        val splitPerAbi =
+            System.getenv("SPLIT_PER_ABI") == "1" ||
+                (project.findProperty("target-platform")?.toString() ?: "").contains(',')
+        if (!splitPerAbi) {
+            ndk {
+                abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+            }
+        }
     }
 
     buildTypes {
@@ -57,7 +71,25 @@ flutter {
     source = "../.."
 }
 
+// Flutter --split-per-abi sets versionCodeOverride = abiIndex*1000 + N
+// (arm64 → 8xxx, v7a → 7xxx). That breaks OTA: CDN latest.json advertises N,
+// but a USB-installed split reports 8xxx so checkOnce() never offers an update,
+// and fat APKs can't install over the split (VERSION_DOWNGRADE). Sideload-only
+// channel — keep every ABI on the pubspec +N code.
+android.applicationVariants.configureEach {
+    val code = flutter.versionCode
+    outputs.configureEach {
+        @Suppress("DEPRECATION")
+        (this as com.android.build.gradle.api.ApkVariantOutput).versionCodeOverride = code
+    }
+}
+
 dependencies {
     // Core-library desugaring runtime for flutter_local_notifications 17+.
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+
+    // Virtual BG peer publish: WebRTC VideoFrame types + ML Kit selfie mask.
+    // Versions aligned with flutter_webrtc 1.4.0 / google_mlkit_selfie_segmentation.
+    implementation("io.github.webrtc-sdk:android:144.7559.01")
+    implementation("com.google.mlkit:segmentation-selfie:16.0.0-beta6")
 }

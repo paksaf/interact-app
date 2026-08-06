@@ -43,3 +43,11 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# INTERACT fleet hardening: never commit env backups/secrets
+.env*.bak*
+.env.*.bak*
+*.env.bak*
+.env.bak
+android/build/
+builds/

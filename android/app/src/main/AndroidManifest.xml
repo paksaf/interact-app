@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- ── Core network + identity ───────────────────────────────── -->
     <uses-permission android:name="android.permission.INTERNET"/>
@@ -7,9 +8,13 @@
     <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/> <!-- Bonsoir mDNS -->
+    <!-- Wi‑Fi Direct (Offline LAN → Direct mode / nearby_service) -->
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
+                     android:usesPermissionFlags="neverForLocation"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
-    <!-- Location personalisation — coarse + fine GPS for the nearest-city greeting (geolocator). -->
+    <!-- Location + Wi‑Fi Direct discovery (geolocator + Offline LAN Direct). -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <!-- Invite-from-address-book — read-only; the app never writes or uploads contacts. -->
@@ -32,6 +37,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
+    <!-- Nearby mesh BLE keep-alive (Maps-style FGS, type connectedDevice) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
 
     <!-- ── Notifications (Android 13+) ───────────────────────────── -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
@@ -40,6 +47,7 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
                      android:maxSdkVersion="32"/>
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
 
     <!-- ── Hardware features (not required — degrade gracefully) ─── -->
@@ -58,7 +66,9 @@
         android:label="INTERACT"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
-        android:banner="@drawable/tv_banner">
+        android:banner="@drawable/tv_banner"
+        android:allowBackup="false"
+        android:fullBackupContent="false">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -87,10 +97,27 @@
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="interact"/>
             </intent-filter>
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data
+                    android:scheme="https"
+                    android:host="talk.interactpak.com"
+                    android:pathPrefix="/j"/>
+            </intent-filter>
         </activity>
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- Nearby mesh FGS (flutter_background_service) — Maps donor pattern -->
+        <service
+            android:name="id.flutter.flutter_background_service.BackgroundService"
+            android:foregroundServiceType="connectedDevice"
+            android:exported="false"
+            android:stopWithTask="true"
+            tools:replace="android:exported,android:stopWithTask" />
+
         <!-- FCM: default channel for the background call-ring handler -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"

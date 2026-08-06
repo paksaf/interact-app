@@ -16,8 +16,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../models/chat.dart';
+import '../../services/auth_service.dart';
 import '../../services/chat_api.dart';
 import '../../utils/chat_formatters.dart';
+import '../../utils/phone_normalize.dart';
+import '../../widgets/branded_app_bar.dart';
 import '../chat/invite_sheet.dart';
 
 class ChatsTab extends ConsumerStatefulWidget {
@@ -39,7 +42,28 @@ class _ChatsTabState extends ConsumerState<ChatsTab> {
   @override
   void initState() {
     super.initState();
-    _threads = ref.read(chatApiProvider).listThreads();
+    _threads = _loadThreads();
+  }
+
+  /// Load threads with a reactive-refresh retry: on a 401 (access token
+  /// rejected), silently renew ONCE via the refresh manager and retry. A true
+  /// server revoke flips [AuthService.sessionRevoked] → the router redirects to
+  /// sign-in; a network failure keeps us signed in and just surfaces a retry.
+  Future<List<ChatThread>> _loadThreads() async {
+    final api = ref.read(chatApiProvider);
+    try {
+      return await api.listAllThreads();
+    } catch (e) {
+      if (e.toString().contains('401')) {
+        final outcome =
+            await ref.read(authServiceProvider).attemptSilentResume();
+        if (outcome == RefreshOutcome.refreshed ||
+            outcome == RefreshOutcome.offlineKeep) {
+          return api.listAllThreads();
+        }
+      }
+      rethrow;
+    }
   }
 
   @override
@@ -49,41 +73,188 @@ class _ChatsTabState extends ConsumerState<ChatsTab> {
   }
 
   Future<void> _refresh() async {
-    setState(() => _threads = ref.read(chatApiProvider).listThreads());
-    await _threads;
+    // Do the work first, then setState with a BLOCK body (returns void).
+    // `setState(() => x = future)` returns the Future from the arrow, which
+    // Flutter rejects ("setState callback returned a Future").
+    final f = _loadThreads();
+    setState(() {
+      _threads = f;
+    });
+    await f;
+  }
+
+  Future<void> _newMenu() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.chat_bubble_outline),
+              title: const Text('New chat'),
+              subtitle: const Text('By phone, email, or @username'),
+              onTap: () { Navigator.pop(ctx); _newChat(); },
+            ),
+            ListTile(
+              leading: const Icon(Icons.group_add_outlined),
+              title: const Text('New group'),
+              subtitle: const Text('Name it, add members'),
+              onTap: () { Navigator.pop(ctx); context.push('/new-group'); },
+            ),
+            ListTile(
+              leading: const Icon(Icons.campaign_outlined),
+              title: const Text('New channel'),
+              subtitle: const Text('Broadcast — only you post'),
+              onTap: () { Navigator.pop(ctx); _newChannel(); },
+            ),
+            ListTile(
+              leading: const Icon(Icons.workspaces_outline),
+              title: const Text('New community'),
+              subtitle: const Text('Group your teams together'),
+              onTap: () { Navigator.pop(ctx); _newCommunity(); },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Prompt for a single-line title (reused by channel + community).
+  Future<String?> _promptTitle(String heading, String hint) async {
+    final ctrl = TextEditingController();
+    final v = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(heading),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
+          decoration: InputDecoration(hintText: hint),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('Create')),
+        ],
+      ),
+    );
+    return (v == null || v.isEmpty) ? null : v;
+  }
+
+  Future<void> _newChannel() async {
+    final title = await _promptTitle('New channel', 'e.g. Company Announcements');
+    if (title == null || !mounted) return;
+    try {
+      final thread = await ref.read(chatApiProvider).createChannel(title);
+      if (!mounted) return;
+      context.push('/chat/${thread.id}', extra: thread);
+      await _refresh();
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not create channel: $e')));
+    }
+  }
+
+  Future<void> _newCommunity() async {
+    final title = await _promptTitle('New community', 'e.g. Karachi Ops');
+    if (title == null || !mounted) return;
+    try {
+      await ref.read(chatApiProvider).createCommunity(title);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Community "$title" created — add groups from the group menu.')));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not create community: $e')));
+    }
   }
 
   Future<void> _newChat() async {
-    final phone = await showDialog<String>(
+    final input = await showDialog<String>(
       context: context,
       builder: (ctx) => const _NewChatDialog(),
     );
-    if (phone == null || phone.trim().isEmpty) return;
+    final q = input?.trim() ?? '';
+    if (q.isEmpty) return;
     try {
-      final result = await ref
-          .read(chatApiProvider)
-          .createDirectThread(peerPhone: phone.trim());
+      final api = ref.read(chatApiProvider);
+      // @handle → lookup → start chat by phone/email. Plain email still works
+      // (contains '@' but not a leading handle). Phone otherwise.
+      final looksEmail = q.contains('@') && !q.startsWith('@');
+      final looksPhone = RegExp(r'^\+?\d[\d\s-]{6,}$').hasMatch(q);
+      final isHandle = !looksPhone &&
+          !looksEmail &&
+          (q.startsWith('@') ||
+              RegExp(r'^[a-zA-Z][a-zA-Z0-9_]{2,31}$').hasMatch(q));
+      String? peerPhone;
+      String? peerEmail;
+      if (isHandle) {
+        final peer = await api.lookupUsername(q);
+        if (!mounted) return;
+        if (peer == null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('No INTERACT user with handle $q')),
+          );
+          return;
+        }
+        peerPhone = peer.phone;
+        peerEmail = peer.email;
+        if ((peerPhone == null || peerPhone.isEmpty) &&
+            (peerEmail == null || peerEmail.isEmpty)) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '${peer.fullName ?? q} has no reachable phone/email on file',
+              ),
+            ),
+          );
+          return;
+        }
+      } else if (looksEmail) {
+        peerEmail = q;
+      } else {
+        peerPhone = normalizeInteractPhone(q) ?? q;
+      }
+      final result = await api.createDirectThread(
+            peerPhone: peerPhone,
+            peerEmail: peerEmail,
+          );
       if (!mounted) return;
       switch (result) {
         case DirectThreadFound(:final thread):
           // Registered peer → open the thread immediately.
           context.push('/chat/${thread.id}', extra: thread);
           await _refresh();
-        case DirectThreadUnregistered(:final rawPhone, :final normalizedPhone):
-          // Not on INTERACT — surface the invite sheet so the user can
-          // pick between Comms Hub invite (5 free) or OS SMS composer.
-          await showModalBottomSheet<void>(
-            context: context,
-            isScrollControlled: true,
-            showDragHandle: false,
-            shape: const RoundedRectangleBorder(
-              borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-            ),
-            builder: (_) => InviteSheet(
-              rawPhone: rawPhone,
-              normalizedPhone: normalizedPhone,
-            ),
-          );
+        case DirectThreadUnregistered(
+            :final rawPhone,
+            :final normalizedPhone,
+            isEmail: final wasEmail,
+          ):
+          if (wasEmail) {
+            // Can't SMS-invite an email — tell the user to invite by number.
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  '$rawPhone isn\'t on INTERACT yet. Invite them by phone number instead.',
+                ),
+              ),
+            );
+          } else {
+            // Not on INTERACT — surface the invite sheet so the user can
+            // pick between Comms Hub invite (5 free) or OS SMS composer.
+            await showModalBottomSheet<void>(
+              context: context,
+              isScrollControlled: true,
+              showDragHandle: false,
+              shape: const RoundedRectangleBorder(
+                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+              ),
+              builder: (_) => InviteSheet(
+                rawPhone: rawPhone,
+                normalizedPhone: normalizedPhone,
+              ),
+            );
+          }
       }
     } catch (e) {
       if (!mounted) return;
@@ -118,9 +289,11 @@ class _ChatsTabState extends ConsumerState<ChatsTab> {
       backgroundColor: Colors.transparent,
       appBar: _searching ? _searchAppBar(context) : _normalAppBar(context),
       floatingActionButton: FloatingActionButton(
-        onPressed: _newChat,
-        tooltip: 'New chat',
-        child: const Icon(Icons.edit),
+        onPressed: _newMenu,
+        tooltip: 'New chat or group',
+        backgroundColor: Theme.of(context).colorScheme.secondary,
+        foregroundColor: Colors.white,
+        child: const Icon(Icons.edit_outlined),
       ),
       body: RefreshIndicator(
         onRefresh: _refresh,
@@ -131,8 +304,17 @@ class _ChatsTabState extends ConsumerState<ChatsTab> {
               return const Center(child: CircularProgressIndicator());
             }
             if (snap.hasError) {
+              // 401 here means a silent refresh was already attempted and did
+              // NOT yield a usable session (offline, or transient server
+              // error) — we are NOT necessarily signed out. A true revoke is
+              // handled by the router redirect, so keep this message soft and
+              // retry-oriented rather than telling the user they're signed out.
+              final unauthorized = snap.error.toString().contains('401');
               return _ErrorState(
-                message: '${snap.error}',
+                message: unauthorized
+                    ? "Couldn't refresh your session just now. Check your "
+                        "connection and tap Retry — you're still signed in."
+                    : '${snap.error}',
                 onRetry: _refresh,
               );
             }
@@ -197,9 +379,11 @@ class _ChatsTabState extends ConsumerState<ChatsTab> {
     );
   }
 
-  AppBar _normalAppBar(BuildContext context) {
-    return AppBar(
-      title: const Text('Chats'),
+  PreferredSizeWidget _normalAppBar(BuildContext context) {
+    return BrandedAppBar(
+      title: 'Chats',
+      subtitle: 'Messages & invites',
+      showBrandGlyph: true,
       actions: [
         IconButton(
           icon: const Icon(Icons.search),
@@ -210,31 +394,54 @@ class _ChatsTabState extends ConsumerState<ChatsTab> {
     );
   }
 
-  AppBar _searchAppBar(BuildContext context) {
+  PreferredSizeWidget _searchAppBar(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return AppBar(
-      title: TextField(
-        controller: _searchCtrl,
-        autofocus: true,
-        decoration: const InputDecoration(
-          hintText: 'Search chats',
-          border: InputBorder.none,
-        ),
-        onChanged: (v) => setState(() => _query = v),
-      ),
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      scrolledUnderElevation: 0,
+      titleSpacing: 0,
       leading: IconButton(
         icon: const Icon(Icons.arrow_back),
         onPressed: _toggleSearch,
       ),
-      actions: [
-        if (_query.isNotEmpty)
-          IconButton(
-            icon: const Icon(Icons.clear),
-            onPressed: () {
-              _searchCtrl.clear();
-              setState(() => _query = '');
-            },
-          ),
-      ],
+      title: Container(
+        height: 42,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: cs.surface.withValues(alpha: 0.72),
+          borderRadius: BorderRadius.circular(21),
+          border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.5)),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.search, size: 18, color: cs.outline),
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextField(
+                controller: _searchCtrl,
+                autofocus: true,
+                textAlignVertical: TextAlignVertical.center,
+                decoration: const InputDecoration(
+                  hintText: 'Search chats',
+                  border: InputBorder.none,
+                  isCollapsed: true,
+                ),
+                onChanged: (v) => setState(() => _query = v),
+              ),
+            ),
+            if (_query.isNotEmpty)
+              GestureDetector(
+                onTap: () {
+                  _searchCtrl.clear();
+                  setState(() => _query = '');
+                },
+                child: Icon(Icons.clear, size: 18, color: cs.outline),
+              ),
+          ],
+        ),
+      ),
+      titleTextStyle: TextStyle(color: cs.onSurface, fontSize: 15),
     );
   }
 }
@@ -250,20 +457,31 @@ class _ThreadTile extends StatelessWidget {
     return Material(
       color: unread ? cs.primary.withValues(alpha: 0.04) : Colors.transparent,
       child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: cs.primaryContainer,
-          backgroundImage: thread.avatarUrl != null
-              ? NetworkImage(thread.avatarUrl!)
-              : null,
-          child: thread.avatarUrl == null
-              ? Text(
-                  thread.title.isEmpty ? '?' : thread.title[0].toUpperCase(),
-                  style: TextStyle(
-                    color: cs.onPrimaryContainer,
-                    fontWeight: FontWeight.w600,
-                  ),
-                )
-              : null,
+        leading: Container(
+          padding: const EdgeInsets.all(1.5),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: (unread ? cs.primary : cs.outlineVariant)
+                  .withValues(alpha: unread ? 0.55 : 0.4),
+              width: 1.5,
+            ),
+          ),
+          child: CircleAvatar(
+            backgroundColor: cs.primaryContainer,
+            backgroundImage: thread.avatarUrl != null
+                ? NetworkImage(thread.avatarUrl!)
+                : null,
+            child: thread.avatarUrl == null
+                ? Text(
+                    thread.title.isEmpty ? '?' : thread.title[0].toUpperCase(),
+                    style: TextStyle(
+                      color: cs.onPrimaryContainer,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  )
+                : null,
+          ),
         ),
         title: Row(
           children: [
@@ -281,11 +499,19 @@ class _ThreadTile extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(left: 4),
                 child: Icon(Icons.group, size: 14, color: cs.outline),
+              )
+            else if (thread.isChannel)
+              Padding(
+                padding: const EdgeInsets.only(left: 4),
+                child: Icon(Icons.campaign, size: 14, color: cs.outline),
               ),
           ],
         ),
         subtitle: Text(
-          messagePreview(preview: thread.lastMessagePreview),
+          messagePreview(
+            preview: thread.lastMessagePreview,
+            lastKindRaw: thread.lastMessageKind,
+          ),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
@@ -446,19 +672,18 @@ class _NewChatDialogState extends State<_NewChatDialog> {
         children: [
           TextField(
             controller: _ctrl,
-            keyboardType: TextInputType.phone,
+            keyboardType: TextInputType.emailAddress,
             autofocus: true,
             decoration: const InputDecoration(
-              labelText: 'Phone number',
-              hintText: '03XX XXXXXXX',
+              labelText: 'Phone, email, or @username',
+              hintText: '03XX…  ·  name@…  ·  @ali',
               border: OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 12),
           Text(
-            'If this number is registered on INTERACT, you\'ll start a '
-            'direct chat. Otherwise, an invite is sent via SMS through '
-            'the Comms Hub.',
+            'Enter a phone number, email, or @username. Registered peers '
+            'open a direct chat. An unregistered number can be invited via SMS.',
             style: TextStyle(
               fontSize: 11,
               color: Theme.of(context).colorScheme.outline,

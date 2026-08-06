@@ -13,8 +13,6 @@
 //
 // Shows live quota ("3 of 5 free invites left") inline so the user
 // knows where they stand before tapping. Fetches quota on open.
-import 'dart:ui' show FontFeature;
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
