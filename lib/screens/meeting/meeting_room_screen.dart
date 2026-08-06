@@ -77,6 +77,12 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
   // used to kill signaling for the rest of the call. 20 s app-level ping
   // + exponential-backoff reconnect (cap 30 s, jittered) fix both.
   Timer? _keepalive;
+  // ICE-restart recovery (see onConnectionState): true while the peer
+  // connection is Disconnected/Failed; opens the renegotiation path.
+  bool _pcDown = false;
+  bool _sentOffer = false; // we were the original offerer → we re-offer
+  int _iceRestarts = 0; // cap attempts so a truly dead path can't loop forever
+  Timer? _iceRestartTimer;
   Timer? _reconnectTimer;
   int _wsRetry = 0;
   bool _hungUp = false;
@@ -343,7 +349,27 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
         debugPrint('[call] pcState=$s');
         if (s == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
           _noAnswerTimer?.cancel(); // peer answered — stop the give-up timer
+          _iceRestartTimer?.cancel();
+          _pcDown = false;
+          _iceRestarts = 0;
+          unawaited(_logSelectedPair('connected'));
           setState(() => _connecting = false);
+        } else if (s ==
+                RTCPeerConnectionState.RTCPeerConnectionStateDisconnected ||
+            s == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
+          // The selected candidate pair stopped passing packets (observed on
+          // device 2026-08-06: Connected → 10s → Disconnected, both videos
+          // frozen on the last frame, NO recovery attempted). The signaling
+          // WS is still alive (20s keepalive), so an ICE RESTART renegotiated
+          // over it re-probes fresh candidate pairs and typically recovers in
+          // 1–2s. Only the ORIGINAL OFFERER re-offers (avoids glare); the
+          // answerer's _pcDown flag opens the offer-handler guard below.
+          if (_hungUp || _connecting) return;
+          _pcDown = true;
+          unawaited(_logSelectedPair('disconnected'));
+          _iceRestartTimer?.cancel();
+          _iceRestartTimer =
+              Timer(const Duration(seconds: 2), () => _attemptIceRestart());
         }
       };
 
@@ -508,6 +534,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
         if (_remoteUserId != null && !_offerAnswered) {
           final offer = await _pc!.createOffer({});
           await _pc!.setLocalDescription(offer);
+          _sentOffer = true; // we own renegotiation (ICE restarts) for this call
           debugPrint('[call] → offer to $_remoteUserId');
           _wsSend({
             'type': 'offer',
@@ -530,8 +557,10 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
       }
     } else if (type == 'offer') {
       // Incoming offer (we are the ANSWERER). Ignore duplicate offers once we've
-      // already answered and connected, so a resend can't tear down live media.
-      if (_offerAnswered && !_connecting) return;
+      // already answered and connected, so a resend can't tear down live media —
+      // EXCEPT while the peer connection is down (_pcDown): that offer is the
+      // peer's ICE RESTART and answering it is how the call recovers.
+      if (_offerAnswered && !_connecting && !_pcDown) return;
       _remoteUserId = m['from']?.toString() ?? _remoteUserId;
       debugPrint('[call] ← offer from $_remoteUserId');
       _markPeerPresentAndFlush();
@@ -650,6 +679,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
     _noAnswerTimer?.cancel();
     _keepalive?.cancel();
     _reconnectTimer?.cancel();
+    _iceRestartTimer?.cancel();
     // Clear native CallKit / Telecom so a stale "accepted" entry can't
     // re-open /room on every cold start (seen on device as endless
     // "Connecting…" after force-stop / reinstall).
@@ -695,6 +725,65 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
     if (sig == null) return null;
     _cancelSent = true;
     return sig.respond(id, 'cancel').catchError((_) {});
+  }
+
+  /// Renegotiate after the selected candidate pair died. Only the original
+  /// offerer sends the restart offer (the answerer just accepts it via the
+  /// relaxed guard above). Capped at 3 attempts; if the path is truly dead
+  /// the existing peer-left / give-up flows end the call normally.
+  Future<void> _attemptIceRestart() async {
+    if (_hungUp || !mounted || _pc == null || !_pcDown) return;
+    if (!_sentOffer) return; // answerer: wait for the offerer's restart offer
+    if (_iceRestarts >= 3) {
+      debugPrint('[call] iceRestart: giving up after $_iceRestarts attempts');
+      return;
+    }
+    _iceRestarts++;
+    debugPrint('[call] iceRestart attempt $_iceRestarts');
+    try {
+      try {
+        await _pc!.restartIce();
+      } catch (_) {/* older plugin — constraint fallback below still works */}
+      final offer = await _pc!
+          .createOffer({'mandatory': {'IceRestart': true}, 'optional': []});
+      await _pc!.setLocalDescription(offer);
+      _wsSend({
+        'type': 'offer',
+        'target': _remoteUserId,
+        'payload': {'sdp': offer.sdp, 'type': offer.type},
+      });
+      // Re-arm: if still down in 4s, try again (up to the cap).
+      _iceRestartTimer =
+          Timer(const Duration(seconds: 4), () => _attemptIceRestart());
+    } catch (e) {
+      debugPrint('[call] iceRestart failed: $e');
+    }
+  }
+
+  /// Diagnostic: log the nominated candidate pair (host/srflx/relay) so a
+  /// field report tells us the network topology without a second debug round.
+  Future<void> _logSelectedPair(String tag) async {
+    try {
+      final stats = await _pc!.getStats();
+      final byId = <String, Map<dynamic, dynamic>>{};
+      for (final r in stats) {
+        if (r.type == 'local-candidate' || r.type == 'remote-candidate') {
+          byId[r.id] = r.values;
+        }
+      }
+      for (final r in stats) {
+        if (r.type != 'candidate-pair') continue;
+        final v = r.values;
+        if (v['state'] != 'succeeded') continue;
+        final l = byId[v['localCandidateId']];
+        final rem = byId[v['remoteCandidateId']];
+        debugPrint('[call] pair@$tag: '
+            'local=${l?['candidateType']}/${l?['protocol']} '
+            'remote=${rem?['candidateType']}/${rem?['protocol']} '
+            'nominated=${v['nominated']} bytesSent=${v['bytesSent']} '
+            'bytesReceived=${v['bytesReceived']}');
+      }
+    } catch (_) {/* diagnostics only */}
   }
 
   Future<void> _hangup() async {

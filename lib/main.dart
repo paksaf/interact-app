@@ -92,6 +92,10 @@ Future<void> _handleNativeCallAccept(
         if (live != null && live.threadId == threadId) id = live.id;
       }
       if (id != null && id.isNotEmpty) {
+        // BEFORE responding: mark handled so the 4s poll can't resurface this
+        // still-`ringing` invite as a second IncomingCallScreen on top of the
+        // room we're about to open ("asked twice to receive the call").
+        signaling.suppress(id);
         await signaling.respond(id, 'accept');
       }
     } catch (_) {/* best-effort — still open the room */}

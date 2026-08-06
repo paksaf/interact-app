@@ -13,6 +13,8 @@ import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../services/call_signaling.dart';
+import '../../services/callkit_service.dart';
+import '../../services/notification_service.dart';
 import '../../services/talk_flags.dart';
 
 class IncomingCallScreen extends ConsumerStatefulWidget {
@@ -119,10 +121,25 @@ class _IncomingCallScreenState extends ConsumerState<IncomingCallScreen> {
     } catch (_) {}
   }
 
+  /// The ring can be live on TWO surfaces at once: this in-app screen AND the
+  /// native CallKit ring / full-screen notification (raised by the FCM handler
+  /// when the app was backgrounded moments earlier). Answering on one surface
+  /// must dismiss the other, or the user is "asked twice to receive the call"
+  /// (observed on device 2026-08-06). Mirrors _dismissRingSurfaces in
+  /// push_service.dart for the cancel path.
+  void _dismissNativeRing() {
+    unawaited(CallKitService.endCall(widget.call.threadId));
+    unawaited(CallKitService.endAllCalls());
+    unawaited(
+      NotificationService.instance.cancelIncomingCall(widget.call.threadId),
+    );
+  }
+
   Future<void> _accept() async {
     if (_answered) return;
     _answered = true;
     _stopRing();
+    _dismissNativeRing();
     await ref.read(callSignalingProvider).respond(widget.call.id, 'accept');
     if (!mounted) return;
     // Join the caller's room (host=false) — same threadId anchor. Carry the
@@ -149,6 +166,7 @@ class _IncomingCallScreenState extends ConsumerState<IncomingCallScreen> {
     if (_answered) return;
     _answered = true;
     _stopRing();
+    _dismissNativeRing();
     await ref.read(callSignalingProvider).respond(widget.call.id, 'decline');
     if (!mounted) return;
     if (context.canPop()) {

@@ -214,4 +214,15 @@ class CallSignaling {
 
   /// Clear the current ring without responding (e.g. it expired / caller hung up).
   void clear() => incoming.value = null;
+
+  /// Mark an invite as handled OUTSIDE the poll (e.g. accepted on the native
+  /// CallKit surface) so the poll never resurfaces it as a second in-app ring.
+  /// Without this, a native accept raced the 4s poll: the poll's GET could
+  /// return the still-`ringing` invite after the accept cleared [incoming],
+  /// pushing IncomingCallScreen ON TOP of the call room — the user was
+  /// "asked twice to receive the call" (observed on device 2026-08-06).
+  void suppress(String id) {
+    _handled.add(id);
+    if (incoming.value?.id == id) incoming.value = null;
+  }
 }
