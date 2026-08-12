@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>INTERACT App Downloads — Talk &amp; Pro for Android</title>
+<meta name="description" content="Download INTERACT Talk and INTERACT Pro APKs for Android phones, tablets and car head units. Direct install, no store account needed.">
+<style>
+  :root{--navy:#12253f;--teal:#0D4A5C;--gold:#be9a5f;--bg:#f5f1e8;--ok:#2E7D32;--muted:#5b6b7b}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--navy);line-height:1.5}
+  header{background:var(--navy);color:#fff;padding:28px 16px;text-align:center}
+  header h1{font-size:1.5rem;letter-spacing:.02em}
+  header p{color:#cdd8e4;font-size:.95rem;margin-top:6px}
+  main{max-width:880px;margin:0 auto;padding:20px 14px 60px}
+  .card{background:#fff;border-radius:14px;box-shadow:0 2px 10px rgba(18,37,63,.08);padding:22px;margin-top:20px}
+  .card h2{font-size:1.25rem;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .ver{font-size:.85rem;background:var(--bg);border:1px solid var(--gold);color:var(--navy);padding:2px 10px;border-radius:20px}
+  .desc{color:var(--muted);margin:8px 0 14px;font-size:.95rem}
+  .btn{display:inline-block;text-decoration:none;font-weight:600;border-radius:10px;padding:12px 18px;margin:6px 8px 0 0;font-size:.95rem}
+  .btn-main{background:var(--ok);color:#fff}
+  .btn-alt{background:#fff;color:var(--teal);border:1.5px solid var(--teal);font-size:.85rem;padding:9px 14px}
+  .btn-copy{background:var(--gold);color:#fff;border:none;cursor:pointer;font:inherit;font-weight:600;border-radius:10px;padding:12px 18px;margin:6px 0 0}
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:.9rem}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #e8e2d4;vertical-align:top}
+  th{color:var(--muted);font-weight:600;white-space:nowrap}
+  .yes{color:var(--ok);font-weight:700}
+  .note{font-size:.85rem;color:var(--muted);margin-top:10px}
+  .steps{margin:10px 0 0 18px;font-size:.92rem}
+  .steps li{margin-top:6px}
+  code{background:var(--bg);padding:1px 6px;border-radius:5px;font-size:.85em;word-break:break-all}
+  .pill{font-size:.75rem;background:var(--teal);color:#fff;border-radius:20px;padding:2px 9px}
+  footer{text-align:center;color:var(--muted);font-size:.8rem;padding:24px}
+  @media (max-width:520px){.btn,.btn-copy{display:block;width:100%;text-align:center;margin-right:0}}
+</style>
+</head>
+<body>
+<header>
+  <h1>INTERACT — App Downloads</h1>
+  <p>Official direct-install Android apps. Phones · Tablets · Car head units</p>
+</header>
+<main>
+
+  <!-- ══════════════ INTERACT TALK ══════════════ -->
+  <section class="card" id="talk">
+    <h2>INTERACT Talk <span class="ver" id="talk-ver">v…</span> <span class="pill">calls · chat · groups</span></h2>
+    <p class="desc">Secure calls, messaging, groups and meetings for the INTERACT fleet. Auto-updates itself after the first install.</p>
+
+    <a class="btn btn-main" id="talk-fat" href="#">⬇ Download for all devices (universal APK)</a>
+    <a class="btn btn-alt" id="talk-arm64" href="#">64-bit only (smaller)</a>
+    <a class="btn btn-alt" id="talk-v7a" href="#">32-bit only (older devices)</a>
+    <button class="btn-copy" data-copy="talk-fat">🔗 Copy share link</button>
+
+    <table>
+      <tr><th>Android version</th><td>Android 7.0 (API 24) or newer (any brand)</td></tr>
+      <tr><th>Phones</th><td class="yes">✓ Supported — 32-bit and 64-bit</td></tr>
+      <tr><th>Tablets</th><td class="yes">✓ Supported — responsive layout</td></tr>
+      <tr><th>Car head units / Android boxes</th><td class="yes">✓ Supported — universal APK includes ARM 32/64-bit and x86_64. Unit must run full Android (not Android Auto projection) and have Google Play services for call notifications; calls/chat work over the unit's Wi-Fi or SIM.</td></tr>
+      <tr><th>Not supported</th><td>Android older than 7.0 (API 24) · 32-bit x86 units · iOS (coming later)</td></tr>
+      <tr><th>Size</th><td id="talk-size">~180 MB universal · ~54–69 MB single-ABI</td></tr>
+      <tr><th>Updates</th><td>Built-in auto-update (checks this server) — install once, stays current</td></tr>
+    </table>
+  </section>
+
+  <!-- ══════════════ INTERACT PRO ══════════════ -->
+  <section class="card" id="pro">
+    <h2>INTERACT Pro <span class="ver" id="pro-ver">v…</span> <span class="pill">docs · OCR · voice · LAN</span></h2>
+    <p class="desc">Professional productivity suite — documents, OCR, text-to-speech, LAN device pairing.</p>
+
+    <a class="btn btn-main" id="pro-fat" href="#">⬇ Download for all devices (universal APK)</a>
+    <button class="btn-copy" data-copy="pro-fat">🔗 Copy share link</button>
+
+    <table>
+      <tr><th>Android version</th><td>Android 8.0 (API 26) or newer (any brand)</td></tr>
+      <tr><th>Phones</th><td class="yes">✓ Supported</td></tr>
+      <tr><th>Tablets</th><td class="yes">✓ Supported</td></tr>
+      <tr><th>Car head units / Android boxes</th><td class="yes">✓ Supported on units running Android 8.0 (API 26)+ (full Android, not projection)</td></tr>
+      <tr><th>Not supported</th><td>Android older than 8.0 (API 26) · iOS</td></tr>
+      <tr><th>Size</th><td id="pro-size">~220 MB universal</td></tr>
+    </table>
+  </section>
+
+  <!-- ══════════════ HOW TO INSTALL ══════════════ -->
+  <section class="card">
+    <h2>How to install (any Android device)</h2>
+    <ol class="steps">
+      <li>Open this page on the device and tap a green download button (or send the copied link via WhatsApp/SMS and open it there).</li>
+      <li>When the download finishes, tap the APK file in your notifications or Files app.</li>
+      <li>If asked, allow <b>"Install unknown apps"</b> for your browser — Settings → tap Allow, then go back. (One-time step; these are official INTERACT builds, verified by the SHA-256 shown in <code>latest.json</code>.)</li>
+      <li>Tap <b>Install</b>. On Xiaomi/Redmi also enable <i>Install via USB / unknown sources</i> under Security settings if blocked.</li>
+      <li>Car head units: if there's no browser, download on a phone, copy the APK to a USB stick, and open it with the unit's file manager.</li>
+    </ol>
+    <p class="note">Updating over an existing install keeps your account and data. If Android says "App not installed – version conflict", uninstall the old copy first (you will need to sign in again).</p>
+  </section>
+
+  <footer>INTERACT · downloads.interactpak.com · files served from this server only — do not trust copies from other sites</footer>
+</main>
+
+<script>
+// Live version + links from each app's latest.json — page never goes stale.
+function wire(app, base){
+  fetch(base + '/latest.json', {cache:'no-store'}).then(r => r.json()).then(j => {
+    const v = document.getElementById(app + '-ver');
+    v.textContent = 'v' + (j.version_name || j.version) + ' (build ' + j.version_code + ')';
+    const fat = document.getElementById(app + '-fat');
+    if (j.apk_url) fat.href = j.apk_url;
+    const a64 = document.getElementById(app + '-arm64');
+    if (a64 && j.apk_url_arm64_v8a) a64.href = j.apk_url_arm64_v8a;
+    const v7 = document.getElementById(app + '-v7a');
+    if (v7 && j.apk_url_armeabi_v7a) v7.href = j.apk_url_armeabi_v7a;
+    if (j.size_bytes) {
+      const mb = Math.round(j.size_bytes / 1048576);
+      const el = document.getElementById(app + '-size');
+      if (el) el.textContent = mb + ' MB universal' + (a64 && j.apk_url_arm64_v8a ? ' · smaller single-ABI available' : '');
+    }
+  }).catch(() => {/* leave static fallbacks */});
+}
+wire('talk', '/interact');
+wire('pro',  '/interactpro');
+
+// Copy share link buttons
+document.querySelectorAll('.btn-copy').forEach(b => {
+  b.addEventListener('click', () => {
+    const a = document.getElementById(b.dataset.copy);
+    const url = (a && a.href && a.href !== '#') ? a.href : location.href;
+    navigator.clipboard.writeText(url).then(() => {
+      const t = b.textContent; b.textContent = '✓ Link copied';
+      setTimeout(() => b.textContent = t, 1800);
+    });
+  });
+});
+</script>
+</body>
+</html>
