@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../services/call_signaling.dart';
 import '../../services/device_contacts_index.dart';
 import '../../services/location_service.dart';
 import '../../services/talk_api.dart';
@@ -485,14 +486,19 @@ class _CallRow extends ConsumerWidget {
       trailing: IconButton(
         icon: Icon(mode == 'voice' ? Icons.phone : Icons.videocam),
         tooltip: 'Call back',
-        onPressed: () {
+        onPressed: () async {
           final threadId = row['threadId']?.toString();
           if (threadId != null && threadId.isNotEmpty) {
-            // Flag-gated 1:1 media surface (LiveKit + captions when
-            // TALK_LK_CALLS on; else P2P '/room'). Code-based dial-back below
-            // stays P2P (shared invite code over the open relay).
+            final inviteId = await ref
+                .read(callSignalingProvider)
+                .ring(threadId, mode);
+            if (!context.mounted) return;
             GoRouter.of(context).push(
-              '${TalkFlags.callRoomPath()}?host=true&mode=$mode&threadId=$threadId',
+              TalkFlags.outgoingCallLocation(
+                threadId: threadId,
+                mode: mode,
+                inviteId: inviteId,
+              ),
             );
             return;
           }

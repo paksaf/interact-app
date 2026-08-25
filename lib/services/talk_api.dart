@@ -175,12 +175,15 @@ class TalkRoomToken {
     required this.roomId,
     required this.iceServers,
     required this.expiresAt,
+    this.callLogId,
   });
   final String token;
   final String wsUrl;
   final String roomId;
   final List<Map<String, dynamic>> iceServers;
   final DateTime expiresAt;
+  /// From /meetings/token — POST /meetings/log on hangup so endedAt is written.
+  final String? callLogId;
 
   factory TalkRoomToken.fromJson(Map<String, dynamic> j) {
     final m = _extractMap(j);
@@ -204,6 +207,7 @@ class TalkRoomToken {
       expiresAt: expiresRaw is String
           ? DateTime.parse(expiresRaw)
           : DateTime.now().add(const Duration(hours: 1)),
+      callLogId: m['callLogId'] as String?,
     );
   }
 }
@@ -485,6 +489,29 @@ class TalkApi {
     return _extractList(body)
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();
+  }
+
+  /// Close the CallLog row minted with the room token. Hangup must POST this
+  /// or `ended_at` stays NULL (PLAN §7.8). Fail-soft — never throw.
+  Future<void> closeCallLog(
+    String id, {
+    String reason = 'hangup',
+    int? durationSecs,
+  }) async {
+    try {
+      final h = await _headers();
+      await http
+          .post(
+            Uri.parse('$_kBase/api/v1/meetings/log'),
+            headers: h,
+            body: jsonEncode({
+              'id': id,
+              'endedReason': reason,
+              if (durationSecs != null) 'durationSecs': durationSecs,
+            }),
+          )
+          .timeout(const Duration(seconds: 8));
+    } catch (_) {/* audit only */}
   }
 
   /// CLOUD transcription of a voice note at [audioUrl] (the absolute /uploads/…

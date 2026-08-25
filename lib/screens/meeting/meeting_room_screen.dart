@@ -28,6 +28,8 @@ import '../../services/auth_service.dart';
 import '../../services/call_signaling.dart';
 import '../../services/callkit_service.dart';
 import '../../services/talk_api.dart';
+import '../../services/talk_flags.dart';
+import '../../widgets/in_call_busy_banner.dart';
 
 class MeetingRoomScreen extends ConsumerStatefulWidget {
   const MeetingRoomScreen({
@@ -144,6 +146,9 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
   // ref.read calls for exactly this reason). An unguarded ref.read there threw
   // away BOTH the cancel and the rest of teardown. See _sendCancelIfNeeded().
   CallSignaling? _signaling;
+  TalkApi? _talkApi;
+  String? _callLogId;
+  DateTime? _callStartedAt;
   bool _cancelSent = false;
   String _endReason = 'ended'; // 'ended' | 'no_answer'
   // Auto-give-up ring timer (host/outgoing only): if the peer never joins
@@ -189,7 +194,6 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
   String get _joinLink => 'https://talk.interactpak.com/j/$_code';
 
   Timer? _inviteStatusTimer;
-  String? _busyBanner; // in-call: "Name tried to call — marked busy"
 
   @override
   void initState() {
@@ -204,28 +208,10 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
         (widget.peerName == null || widget.peerName!.trim().isEmpty)) {
       _resolvedCode = TalkApi.generateRoomCode();
     }
-    // Mark on-call so a second ringer gets `busy` instead of a stacked ring UI.
     _signaling = ref.read(callSignalingProvider);
-    ref.read(callSignalingProvider).setInCall(true);
-    ref
-        .read(callSignalingProvider)
-        .missedWhileBusy
-        .addListener(_onMissedWhileBusy);
+    _talkApi = ref.read(talkApiProvider);
     _startInviteStatusPoll();
     _bootstrap();
-  }
-
-  void _onMissedWhileBusy() {
-    final call = ref.read(callSignalingProvider).missedWhileBusy.value;
-    if (call == null || !mounted) return;
-    setState(() {
-      _busyBanner = '${call.callerName} tried to call — marked busy';
-    });
-    Future<void>.delayed(const Duration(seconds: 6), () {
-      if (!mounted) return;
-      ref.read(callSignalingProvider).clearMissedWhileBusy();
-      setState(() => _busyBanner = null);
-    });
   }
 
   /// While host is still connecting, poll invite status so a remote `busy`
@@ -234,7 +220,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
     final id = widget.inviteId;
     if (!widget.isHost || id == null || id.isEmpty) return;
     _inviteStatusTimer?.cancel();
-    _inviteStatusTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+    Future<void> tick() async {
       if (!mounted || !_connecting) {
         _inviteStatusTimer?.cancel();
         return;
@@ -248,6 +234,11 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
         _inviteStatusTimer?.cancel();
         await _endCall(reason: status == 'declined' ? 'declined' : 'cancelled');
       }
+    }
+
+    unawaited(tick());
+    _inviteStatusTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      unawaited(tick());
     });
   }
 
@@ -260,6 +251,13 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
     _noAnswerTimer?.cancel();
     _noAnswerTimer = Timer(_noAnswerAfter, () {
       if (!mounted || !_connecting) return;
+      // New meeting / QR wait: stay in the room until someone joins or the
+      // host hangs up. A 45s "No answer" here killed the gold busy banner
+      // and dropped people waiting for a scan.
+      final adHocHost = widget.isHost &&
+          widget.threadId == null &&
+          (widget.inviteId == null || widget.inviteId!.isEmpty);
+      if (adHocHost) return;
       _endCall(reason: widget.isHost ? 'no_answer' : 'ended');
     });
     try {
@@ -285,6 +283,9 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
                     roomId: _resolvedCode,
                   )
               : await ref.read(talkApiProvider).joinRoom(widget.roomCode);
+
+      _callLogId = tok.callLogId;
+      _callStartedAt = DateTime.now();
 
       // Local media. Audio uses WebRTC's built-in DSP (P2 noise suppression):
       // echo cancellation + noise suppression + auto gain — huge for noisy
@@ -676,6 +677,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
     // hang-up could pop the route with the request still queued behind the
     // token refresh inside respond()'s _headers().
     final Future<void>? cancelInFlight = _sendCancelIfNeeded();
+    final Future<void>? logClose = _closeCallLogIfNeeded();
     _noAnswerTimer?.cancel();
     _keepalive?.cancel();
     _reconnectTimer?.cancel();
@@ -704,6 +706,11 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
         await cancelInFlight.timeout(const Duration(seconds: 4));
       } catch (_) {/* best-effort — callee still expires on its own timeout */}
     }
+    if (logClose != null) {
+      try {
+        await logClose.timeout(const Duration(seconds: 4));
+      } catch (_) {/* audit only */}
+    }
   }
 
   /// POST the ring cancellation, at most once per call.
@@ -725,6 +732,20 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
     if (sig == null) return null;
     _cancelSent = true;
     return sig.respond(id, 'cancel').catchError((_) {});
+  }
+
+  Future<void>? _closeCallLogIfNeeded() {
+    final id = _callLogId;
+    final api = _talkApi;
+    if (id == null || id.isEmpty || api == null) return null;
+    _callLogId = null;
+    final started = _callStartedAt;
+    final secs = started == null
+        ? null
+        : DateTime.now().difference(started).inSeconds.clamp(0, 86400).toInt();
+    return api
+        .closeCallLog(id, reason: _endReason, durationSecs: secs)
+        .catchError((_) {});
   }
 
   /// Renegotiate after the selected candidate pair died. Only the original
@@ -795,6 +816,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
   /// end-of-call panel (Call again / Back to chat) instead of popping
   /// straight back to the chat.
   Future<void> _endCall({String reason = 'ended'}) async {
+    _endReason = reason;
     await _teardown();
     if (mounted) {
       setState(() {
@@ -807,24 +829,24 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
   /// Re-invoke the same 1:1 call: re-ring the peer (thread-anchored calls
   /// only) and replace this screen with a fresh host room so all WebRTC
   /// resources are re-created cleanly.
-  void _callAgain() {
+  Future<void> _callAgain() async {
     final threadId = widget.threadId;
     if (threadId == null) {
       _backToChat();
       return;
     }
-    ref.read(callSignalingProvider).ring(threadId, widget.mode);
-    final qp = <String, String>{
-      'host': 'true',
-      'mode': widget.mode,
-      'threadId': threadId,
-      if (widget.peerName != null && widget.peerName!.isNotEmpty)
-        'peerName': widget.peerName!,
-      if (widget.peerAvatar != null && widget.peerAvatar!.isNotEmpty)
-        'peerAvatar': widget.peerAvatar!,
-    };
-    final uri = Uri(path: '/room', queryParameters: qp);
-    context.pushReplacement(uri.toString());
+    final inviteId =
+        await ref.read(callSignalingProvider).ring(threadId, widget.mode);
+    if (!mounted) return;
+    context.pushReplacement(
+      TalkFlags.outgoingCallLocation(
+        threadId: threadId,
+        mode: widget.mode,
+        inviteId: inviteId,
+        peerName: widget.peerName,
+        peerAvatar: widget.peerAvatar,
+      ),
+    );
   }
 
   void _backToChat() {
@@ -971,10 +993,6 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
     _noAnswerTimer?.cancel();
     _inviteStatusTimer?.cancel();
     try {
-      ref
-          .read(callSignalingProvider)
-          .missedWhileBusy
-          .removeListener(_onMissedWhileBusy);
       ref.read(callSignalingProvider).setInCall(false);
     } catch (_) {/* provider may already be disposed */}
     _hangup();
@@ -1255,40 +1273,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
                 ),
               ),
             ),
-            // Second-caller busy banner (someone rang while we were already on a call)
-            if (_busyBanner != null)
-              Positioned(
-                top: 56,
-                left: 16,
-                right: 16,
-                child: Semantics(
-                  liveRegion: true,
-                  label: _busyBanner,
-                  child: Material(
-                    color: const Color(0xFFBE9A5F),
-                    borderRadius: BorderRadius.circular(12),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.phone_missed, color: Color(0xFF12253F), size: 18),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              _busyBanner!,
-                              style: const TextStyle(
-                                color: Color(0xFF12253F),
-                                fontWeight: FontWeight.w600,
-                                fontSize: 13,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
+            const InCallBusyBanner(),
             // Bottom controls
             Positioned(
               left: 0,

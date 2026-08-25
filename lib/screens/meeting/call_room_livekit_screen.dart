@@ -32,6 +32,8 @@ import '../../services/call_signaling.dart';
 import '../../services/callkit_service.dart';
 import '../../services/live_api.dart';
 import '../../services/livekit_service.dart';
+import '../../services/talk_api.dart';
+import '../../widgets/in_call_busy_banner.dart';
 
 class CallRoomLiveKitScreen extends ConsumerStatefulWidget {
   const CallRoomLiveKitScreen({
@@ -66,9 +68,14 @@ class _CallRoomLiveKitScreenState
     extends ConsumerState<CallRoomLiveKitScreen> {
   final LiveRoomController _ctrl = LiveRoomController();
   late final LiveApi _liveApi; // captured so dispose() can auto-stop captions
+  late final TalkApi _talkApi;
+  String? _callLogId;
+  DateTime? _callStartedAt;
   bool _starting = true;
   String? _startError;
   bool _remoteEverJoined = false;
+  Timer? _inviteStatusTimer;
+  bool _peerInviteResolved = false;
 
   // Captions state (mirrors LiveRoomScreen).
   String _captionLanguage = 'multi';
@@ -103,9 +110,45 @@ class _CallRoomLiveKitScreenState
   void initState() {
     super.initState();
     _liveApi = ref.read(liveApiProvider);
+    _talkApi = ref.read(talkApiProvider);
     WakelockPlus.enable();
     _ctrl.addListener(_onCtrlChanged);
+    _startInviteStatusPoll();
     _start();
+  }
+
+  void _startInviteStatusPoll() {
+    final id = widget.inviteId;
+    if (!widget.isHost || id == null || id.isEmpty) return;
+    Future<void> tick() async {
+      if (!mounted || _remoteEverJoined || _leaving) {
+        _inviteStatusTimer?.cancel();
+        return;
+      }
+      final status = await ref.read(callSignalingProvider).inviteStatus(id);
+      if (!mounted || status == null) return;
+      if (status == 'busy' || status == 'declined' || status == 'cancelled') {
+        _inviteStatusTimer?.cancel();
+        _peerInviteResolved = true;
+        if (mounted) {
+          final name = (widget.peerName ?? '').trim();
+          final msg = switch (status) {
+            'busy' => name.isEmpty ? 'Busy' : '$name is on another call',
+            'declined' => name.isEmpty ? 'Call declined' : '$name declined',
+            'cancelled' => 'Call cancelled',
+            _ => 'Call ended',
+          };
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(msg)));
+        }
+        await _leave();
+      }
+    }
+
+    unawaited(tick());
+    _inviteStatusTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      unawaited(tick());
+    });
   }
 
   void _onCtrlChanged() {
@@ -129,6 +172,8 @@ class _CallRoomLiveKitScreenState
         mode: '1:1',
       ))
           .copyWith(voiceFirst: widget.mode != 'video');
+      _callLogId = join.callLogId;
+      _callStartedAt = DateTime.now();
       await _ctrl.connect(join);
       if (!mounted) return;
       setState(() => _starting = false);
@@ -183,7 +228,8 @@ class _CallRoomLiveKitScreenState
     if (widget.isHost &&
         widget.inviteId != null &&
         widget.inviteId!.isNotEmpty &&
-        !_remoteEverJoined) {
+        !_remoteEverJoined &&
+        !_peerInviteResolved) {
       cancelInFlight = ref
           .read(callSignalingProvider)
           .respond(widget.inviteId!, 'cancel')
@@ -194,12 +240,29 @@ class _CallRoomLiveKitScreenState
       unawaited(CallKitService.endCall(tid));
     }
     unawaited(CallKitService.endAllCalls());
+    Future<void>? logClose;
+    final logId = _callLogId;
+    _callLogId = null;
+    if (logId != null && logId.isNotEmpty) {
+      final started = _callStartedAt;
+      final secs = started == null
+          ? null
+          : DateTime.now().difference(started).inSeconds.clamp(0, 86400).toInt();
+      logClose = _talkApi
+          .closeCallLog(logId, reason: 'ended', durationSecs: secs)
+          .catchError((_) {});
+    }
     await _ctrl.leave();
     WakelockPlus.disable();
     if (cancelInFlight != null) {
       try {
         await cancelInFlight.timeout(const Duration(seconds: 4));
       } catch (_) {/* best-effort — callee still expires on its own timeout */}
+    }
+    if (logClose != null) {
+      try {
+        await logClose.timeout(const Duration(seconds: 4));
+      } catch (_) {/* audit only */}
     }
     if (mounted) context.pop();
   }
@@ -214,6 +277,7 @@ class _CallRoomLiveKitScreenState
         _liveApi.toggleCaptions(_ctrl.roomName, false).catchError((_) => false),
       );
     }
+    _inviteStatusTimer?.cancel();
     WakelockPlus.disable();
     _ctrl.removeListener(_onCtrlChanged);
     _ctrl.dispose();
@@ -341,7 +405,9 @@ class _CallRoomLiveKitScreenState
       child: Scaffold(
         backgroundColor: Colors.black,
         body: SafeArea(
-          child: AnimatedBuilder(
+          child: Stack(
+            children: [
+              AnimatedBuilder(
             animation: _ctrl,
             builder: (context, _) {
               if (_starting) {
@@ -355,6 +421,9 @@ class _CallRoomLiveKitScreenState
               }
               return _callStack();
             },
+          ),
+              const InCallBusyBanner(),
+            ],
           ),
         ),
       ),

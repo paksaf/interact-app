@@ -11,6 +11,8 @@
 //
 // Self-contained: it mints the LiveKit token (LiveApi) and connects
 // (LiveRoomController) itself, so routing only needs the room code + role.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -21,6 +23,8 @@ import '../../l10n/app_localizations.dart';
 import '../../services/camera_effects.dart';
 import '../../services/live_api.dart';
 import '../../services/livekit_service.dart';
+import '../../services/talk_api.dart';
+import '../../widgets/in_call_busy_banner.dart';
 
 class LiveRoomScreen extends ConsumerStatefulWidget {
   const LiveRoomScreen({
@@ -54,12 +58,16 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
   int _reconnectAttempts = 0;
   bool _reconnectScheduled = false;
   static const int _maxReconnects = 3;
+  late final TalkApi _talkApi;
+  String? _callLogId;
+  DateTime? _callStartedAt;
 
   bool get _isPtt => widget.mode == 'ptt';
 
   @override
   void initState() {
     super.initState();
+    _talkApi = ref.read(talkApiProvider);
     WakelockPlus.enable();
     _ctrl.addListener(_onCtrlChanged);
     _start();
@@ -102,6 +110,8 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
             mode: widget.mode,
           ))
           .copyWith(holdToSpeak: _isPtt, voiceFirst: !_isPtt);
+      _callLogId = join.callLogId;
+      _callStartedAt = DateTime.now();
       // Seed virtual BG before connect so camera publish picks it up.
       final effect = ref.read(cameraEffectProvider);
       await _ctrl.applyCameraEffect(effect);
@@ -125,6 +135,19 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
   }
 
   Future<void> _leave() async {
+    final logId = _callLogId;
+    _callLogId = null;
+    if (logId != null && logId.isNotEmpty) {
+      final started = _callStartedAt;
+      final secs = started == null
+          ? null
+          : DateTime.now().difference(started).inSeconds.clamp(0, 86400).toInt();
+      unawaited(
+        _talkApi
+            .closeCallLog(logId, reason: 'ended', durationSecs: secs)
+            .catchError((_) {}),
+      );
+    }
     await _ctrl.leave();
     WakelockPlus.disable();
     if (mounted) context.pop();
@@ -148,7 +171,9 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
       child: Scaffold(
         backgroundColor: Colors.black,
         body: SafeArea(
-          child: AnimatedBuilder(
+          child: Stack(
+            children: [
+              AnimatedBuilder(
             animation: _ctrl,
             builder: (context, _) {
               if (_starting) return _statusView('Connecting…', spinner: true);
@@ -185,6 +210,9 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
                 ],
               );
             },
+          ),
+              const InCallBusyBanner(),
+            ],
           ),
         ),
       ),

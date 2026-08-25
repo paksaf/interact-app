@@ -48,6 +48,7 @@ class LiveJoin {
     this.expiresAt,
     this.voiceFirst = true,
     this.holdToSpeak = false,
+    this.callLogId,
   });
 
   final String token;
@@ -65,6 +66,9 @@ class LiveJoin {
   /// Walkie / PTT mode: start with mic off; UI hold-to-speak enables mic.
   final bool holdToSpeak;
 
+  /// From /talk/live/token — POST /meetings/log on leave.
+  final String? callLogId;
+
   /// Whether this participant is allowed to publish (camera/mic). Listeners
   /// are subscribe-only; the server's grant enforces it, but we also use
   /// this to skip the publish calls client-side.
@@ -80,6 +84,7 @@ class LiveJoin {
         expiresAt: expiresAt,
         voiceFirst: voiceFirst ?? this.voiceFirst,
         holdToSpeak: holdToSpeak ?? this.holdToSpeak,
+        callLogId: callLogId,
       );
 
   factory LiveJoin.fromData(Map<String, dynamic> d) => LiveJoin(
@@ -95,6 +100,7 @@ class LiveJoin {
         // Default voice-first; callers may override via copyWith.
         voiceFirst: (d['voiceFirst'] as bool?) ?? true,
         holdToSpeak: (d['holdToSpeak'] as bool?) ?? false,
+        callLogId: d['callLogId'] as String?,
       );
 }
 

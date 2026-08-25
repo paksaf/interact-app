@@ -33,4 +33,24 @@ class TalkFlags {
   /// site can call this and stays byte-for-byte identical to today's behaviour
   /// in a default build.
   static String callRoomPath() => liveKitCalls ? '/call-lk' : '/room';
+
+  /// Host 1:1 location after [CallSignaling.ring] — always include [inviteId]
+  /// when present so the room can poll busy/declined instead of waiting 45s.
+  static String outgoingCallLocation({
+    required String threadId,
+    required String mode,
+    String? inviteId,
+    String? peerName,
+    String? peerAvatar,
+  }) {
+    final qp = <String, String>{
+      'host': 'true',
+      'mode': mode,
+      'threadId': threadId,
+      if (inviteId != null && inviteId.isNotEmpty) 'inviteId': inviteId,
+      if (peerName != null && peerName.isNotEmpty) 'peerName': peerName,
+      if (peerAvatar != null && peerAvatar.isNotEmpty) 'peerAvatar': peerAvatar,
+    };
+    return Uri(path: callRoomPath(), queryParameters: qp).toString();
+  }
 }
