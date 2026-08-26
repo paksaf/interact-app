@@ -487,7 +487,10 @@ class _CallRow extends ConsumerWidget {
         icon: Icon(mode == 'voice' ? Icons.phone : Icons.videocam),
         tooltip: 'Call back',
         onPressed: () async {
-          final threadId = row['threadId']?.toString();
+          final threadId = row['threadId']?.toString() ??
+              (row['subjectType']?.toString() == 'thread'
+                  ? row['subjectId']?.toString()
+                  : null);
           if (threadId != null && threadId.isNotEmpty) {
             final inviteId = await ref
                 .read(callSignalingProvider)
@@ -498,21 +501,20 @@ class _CallRow extends ConsumerWidget {
                 threadId: threadId,
                 mode: mode,
                 inviteId: inviteId,
+                peerName: row['peerName'] as String?,
               ),
             );
             return;
           }
-          final code = row['roomId']?.toString().split(':').last;
-          if (code == null || code.isEmpty) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('No call details to dial back'),
-                duration: Duration(seconds: 2),
-              ),
-            );
-            return;
-          }
-          GoRouter.of(context).push('/room?code=$code&mode=$mode');
+          // Ad-hoc talk:CODE rows have no peer thread. Rejoining the old
+          // code as a guest (host=false) is a dead room. Host a new call.
+          if (!context.mounted) return;
+          GoRouter.of(context).push(
+            Uri(
+              path: TalkFlags.callRoomPath(),
+              queryParameters: {'host': 'true', 'mode': mode},
+            ).toString(),
+          );
         },
       ),
     );

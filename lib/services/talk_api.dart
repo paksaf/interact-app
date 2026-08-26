@@ -486,9 +486,20 @@ class TalkApi {
       throw Exception('history failed: ${res.statusCode}');
     }
     final body = jsonDecode(res.body) as Map<String, dynamic>;
-    return _extractList(body)
-        .map((e) => Map<String, dynamic>.from(e as Map))
-        .toList();
+    return _extractList(body).map((e) {
+      final m = Map<String, dynamic>.from(e as Map);
+      final subjectType = m['subjectType']?.toString();
+      final subjectId = m['subjectId']?.toString();
+      if ((m['threadId'] == null || '${m['threadId']}'.isEmpty) &&
+          subjectType == 'thread' &&
+          subjectId != null &&
+          subjectId.isNotEmpty) {
+        m['threadId'] = subjectId;
+      }
+      m['durationSec'] = m['durationSec'] ?? m['durationSecs'] ?? 0;
+      m['direction'] = m['direction'] ?? 'outgoing';
+      return m;
+    }).toList();
   }
 
   /// Close the CallLog row minted with the room token. Hangup must POST this

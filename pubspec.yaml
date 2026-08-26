@@ -1,7 +1,7 @@
 name: interact
 description: "INTERACT — voice/video-first, offline-capable, AI-assisted communication super-app. Free, open-source (AGPLv3), Pakistan-first."
 publish_to: "none"
-version: 0.5.13+6052
+version: 0.5.14+6053
 
 environment:
   sdk: ^3.6.0
@@ -54,7 +54,10 @@ dependencies:
   flutter_background_service: ^5.0.5
 
   # ── Invite-code scanning + display ──────────────────────────────────
-  mobile_scanner: ^5.0.0
+  # 6.x uses Google ML Kit 7 on iOS — required to coexist with
+  # google_mlkit_selfie_segmentation 0.9 (ML Kit 7). 5.x pins ML Kit 6
+  # and CocoaPods cannot resolve both.
+  mobile_scanner: ^6.0.11
   qr_flutter: ^4.1.0
 
   # ── Voice messages ──────────────────────────────────────────────────
