@@ -124,8 +124,12 @@ class _ContactsTabState extends ConsumerState<ContactsTab> {
                 phone: phone,
               );
               final src = r['source'] as String? ?? 'talk';
-              final online =
-                  ref.read(presenceServiceProvider).isOnline(phone);
+              final pStatus =
+                  ref.read(presenceServiceProvider).status(phone);
+              final online = pStatus != PresenceStatus.offline;
+              final dotColor = pStatus == PresenceStatus.busy
+                  ? const Color(0xFFF59E0B) // amber — in a call
+                  : const Color(0xFF22C55E); // green — active
               return ListTile(
                 leading: Stack(
                   children: [
@@ -135,7 +139,7 @@ class _ContactsTabState extends ConsumerState<ContactsTab> {
                         shape: BoxShape.circle,
                         border: Border.all(
                           color: online
-                              ? const Color(0xFF22C55E).withValues(alpha: 0.7)
+                              ? dotColor.withValues(alpha: 0.7)
                               : cs.outlineVariant.withValues(alpha: 0.4),
                           width: 1.5,
                         ),
@@ -156,7 +160,7 @@ class _ContactsTabState extends ConsumerState<ContactsTab> {
                           width: 13,
                           height: 13,
                           decoration: BoxDecoration(
-                            color: const Color(0xFF22C55E),
+                            color: dotColor,
                             shape: BoxShape.circle,
                             border: Border.all(color: cs.surface, width: 2),
                           ),

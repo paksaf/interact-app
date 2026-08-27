@@ -115,6 +115,8 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
 
   bool _videoOn = true;
   bool _audioOn = true;
+  /// Loudspeaker route state (video calls default true — set in _bootstrap).
+  bool _speakerOn = true;
   bool _connecting = true;
   String? _error;
 
@@ -379,6 +381,8 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
         } catch (e) {
           debugPrint('[call] speakerphone routing failed: $e');
         }
+      } else {
+        _speakerOn = false; // voice-only starts on the earpiece
       }
 
       // ICE servers: prefer a server-minted ephemeral TURN credential
@@ -839,6 +843,84 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
     _flashTimer = Timer(const Duration(milliseconds: 1600), () {
       if (mounted) setState(() => _flashEmoji = null);
     });
+  }
+
+  /// Audio-route picker (operator request 2026-08-27): speaker/earpiece
+  /// toggle + every output the OS knows (Bluetooth headsets/speakers, wired,
+  /// and on iOS AirPlay devices — i.e. TVs — appear here). Uses
+  /// flutter_webrtc's Helper.audiooutputs / selectAudioOutput.
+  Future<void> _showAudioRouteSheet() async {
+    List<MediaDeviceInfo> outs = const [];
+    try {
+      outs = await Helper.audiooutputs;
+    } catch (e) {
+      debugPrint('[call] audiooutputs failed: $e');
+    }
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF15272E),
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 14, 20, 6),
+              child: Text('Audio output',
+                  style: TextStyle(
+                      color: Colors.white70, fontWeight: FontWeight.w700)),
+            ),
+            SwitchListTile(
+              secondary:
+                  const Icon(Icons.volume_up, color: Colors.white),
+              title: const Text('Loudspeaker',
+                  style: TextStyle(color: Colors.white)),
+              value: _speakerOn,
+              onChanged: (v) async {
+                Navigator.pop(ctx);
+                try {
+                  await Helper.setSpeakerphoneOn(v);
+                  if (mounted) setState(() => _speakerOn = v);
+                } catch (e) {
+                  debugPrint('[call] speaker toggle failed: $e');
+                }
+              },
+            ),
+            for (final d in outs)
+              ListTile(
+                leading: Icon(
+                  d.label.toLowerCase().contains('bluetooth') ||
+                          d.label.toLowerCase().contains('airpod')
+                      ? Icons.bluetooth_audio
+                      : d.label.toLowerCase().contains('speaker')
+                          ? Icons.volume_up
+                          : Icons.hearing,
+                  color: Colors.white,
+                ),
+                title: Text(d.label.isEmpty ? d.deviceId : d.label,
+                    style: const TextStyle(color: Colors.white)),
+                onTap: () async {
+                  Navigator.pop(ctx);
+                  try {
+                    await Helper.selectAudioOutput(d.deviceId);
+                    debugPrint('[call] audio output → ${d.label}');
+                  } catch (e) {
+                    debugPrint('[call] selectAudioOutput failed: $e');
+                  }
+                },
+              ),
+            if (outs.isEmpty)
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 4, 20, 16),
+                child: Text(
+                    'No selectable outputs reported — use the Loudspeaker '
+                    'switch, or connect Bluetooth in system settings.',
+                    style: TextStyle(color: Colors.white54, fontSize: 13)),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _onGestureMessage(RTCDataChannelMessage msg) {
@@ -1588,6 +1670,15 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
                     color: Colors.white,
                     bg: Colors.black54,
                     onTap: _flipCamera,
+                  ),
+                  const SizedBox(width: 16),
+                  _CtrlButton(
+                    icon: _speakerOn
+                        ? Icons.volume_up
+                        : Icons.hearing,
+                    color: Colors.white,
+                    bg: Colors.black54,
+                    onTap: _showAudioRouteSheet,
                   ),
                   const SizedBox(width: 16),
                   _CtrlButton(

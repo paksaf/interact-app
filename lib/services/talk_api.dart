@@ -210,6 +210,19 @@ class TalkRoomToken {
   }
 }
 
+/// Rich presence for one peer key (phone or userId).
+///
+/// The deployed backend returns plain booleans today; richer maps
+/// ({online, busy, lastSeenAt}) are parsed the moment the server sends them
+/// (queued behind the qurbanisahulat freeze — roadmap §10), so busy/last-seen
+/// light up with a server deploy and NO app update.
+class PresenceInfo {
+  const PresenceInfo({required this.online, this.busy = false, this.lastSeen});
+  final bool online;
+  final bool busy;
+  final DateTime? lastSeen;
+}
+
 class TalkApi {
   TalkApi(this._auth);
   final AuthService _auth;
@@ -342,7 +355,7 @@ class TalkApi {
 
   /// Presence for peer keys (phone / uuid / externalUserId).
   /// Degrades to {} on any error — never throws.
-  Future<Map<String, bool>> presence(List<String> keys) async {
+  Future<Map<String, PresenceInfo>> presence(List<String> keys) async {
     if (keys.isEmpty) return const {};
     try {
       final h = await _headers();
@@ -353,13 +366,18 @@ class TalkApi {
       if (res.statusCode != 200) return const {};
       final body = jsonDecode(res.body) as Map<String, dynamic>;
       final data = body['data'] ?? body;
-      final out = <String, bool>{};
+      final out = <String, PresenceInfo>{};
       if (data is Map) {
         data.forEach((k, v) {
           if (v is bool) {
-            out[k.toString()] = v;
+            out[k.toString()] = PresenceInfo(online: v);
           } else if (v is Map && v['online'] is bool) {
-            out[k.toString()] = v['online'] as bool;
+            out[k.toString()] = PresenceInfo(
+              online: v['online'] as bool,
+              busy: v['busy'] == true,
+              lastSeen: DateTime.tryParse(
+                  (v['lastSeenAt'] ?? v['lastSeen'] ?? '').toString()),
+            );
           }
         });
       }
