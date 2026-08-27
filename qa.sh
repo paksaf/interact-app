@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 #
 # QA bridge — lets the (remote) agent "see" Phone A by capturing screenshots +
-# logcat into ~/Documents/INTERACT (a folder the agent can read). Run on the Mac
+# logcat into $HOME/dev/INTERACT (a folder the agent can read). Run on the Mac
 # with Phone A on cable.
 #
 # Usage:

@@ -49,6 +49,9 @@
 		</dict>
 		<key>UIApplicationSupportsIndirectInputEvents</key>
 		<true/>
+		<!-- Required for flutter_contacts (invite-from-address-book). Read-only. -->
+		<key>NSContactsUsageDescription</key>
+		<string>INTERACT uses your contacts so you can invite people from your address book. Contacts stay on your device and are never uploaded.</string>
 		<key>UILaunchStoryboardName</key>
 		<string>LaunchScreen</string>
 		<key>UIMainStoryboardFile</key>
@@ -70,6 +73,27 @@
 		<true/>
 		<key>UIViewControllerBasedStatusBarAppearance</key>
 		<false/>
+		<!-- Calls: WebRTC mic/camera. iOS KILLS the process (TCC crash) if these
+		     keys are absent when getUserMedia runs — required, not cosmetic. -->
+		<key>NSMicrophoneUsageDescription</key>
+		<string>INTERACT Talk uses the microphone for voice and video calls and voice messages.</string>
+		<key>NSCameraUsageDescription</key>
+		<string>INTERACT Talk uses the camera for video calls and to share photos in chat.</string>
+		<!-- Chat media: image_picker / file_picker -->
+		<key>NSPhotoLibraryUsageDescription</key>
+		<string>INTERACT Talk lets you pick photos and videos from your library to share in chat.</string>
+		<key>NSPhotoLibraryAddUsageDescription</key>
+		<string>INTERACT Talk can save received photos and videos to your library.</string>
+		<!-- speech_to_text -->
+		<key>NSSpeechRecognitionUsageDescription</key>
+		<string>INTERACT Talk transcribes your voice to text when you dictate a message.</string>
+		<!-- Keep calls alive when the app is backgrounded -->
+		<key>UIBackgroundModes</key>
+		<array>
+			<string>audio</string>
+			<string>voip</string>
+			<string>remote-notification</string>
+		</array>
 		<!-- BLE mesh / nearby devices scan -->
 		<key>NSBluetoothAlwaysUsageDescription</key>
 		<string>INTERACT Talk uses Bluetooth to find nearby phones and devices for offline mesh and status.</string>

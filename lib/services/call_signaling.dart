@@ -19,8 +19,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 
 import 'auth_service.dart';
+import 'api_base.dart';
 
-const _kBase = 'https://qurbanisahulat.com';
+String get _kBase => ApiBase.current;
 
 /// A ringing invite the callee should answer.
 class IncomingCall {

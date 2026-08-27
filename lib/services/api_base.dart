@@ -1,0 +1,93 @@
+// ApiBase — permanent DNS-failover base-URL resolver (added 2026-08-26).
+//
+// WHY: some ISP/home-router resolvers (observed: the HS8145C5's upstream)
+// intermittently fail to resolve qurbanisahulat.com while resolving
+// interactpak.com fine (errno 8 host-lookup failures; the authoritative
+// zone itself is healthy — verified via DoH the same day). We cannot fix
+// user routers or ISPs, so the app carries an ordered list of equivalent
+// hosts for the SAME backend and fails over automatically.
+//
+// SERVER PREREQ: talk.interactpak.com must be an alias of the Talk backend
+// (Caddy: add the host to the qurbanisahulat.com site block; DNS A →
+// 178.105.73.238). See docs/runbooks/TALK_DNS_FAILOVER_2026-08-26.md.
+//
+// USAGE: every service reads `ApiBase.current` instead of a const host.
+// Call `ApiBase.init()` once in main(); call `ApiBase.checkAndMaybeSwitch()`
+// fire-and-forget from any network-failure catch (throttled internally).
+import 'dart:async';
+import 'dart:io';
+
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+
+class ApiBase {
+  ApiBase._();
+
+  /// Ordered candidates — first reachable wins. The dart-define override
+  /// (staging/dev) stays first so existing build flags keep working.
+  static const List<String> candidates = [
+    String.fromEnvironment(
+      'INTERACT_TALK_API_BASE',
+      defaultValue: 'https://qurbanisahulat.com',
+    ),
+    'https://talk.interactpak.com',
+  ];
+
+  static String _current = candidates.first;
+  static String get current => _current;
+
+  static DateTime _lastProbe = DateTime.fromMillisecondsSinceEpoch(0);
+  static bool _probing = false;
+
+  /// Restore last-known-good base, then verify it in the background.
+  static Future<void> init() async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      final saved = sp.getString('talk_api_base');
+      if (saved != null && candidates.contains(saved)) _current = saved;
+    } catch (_) {}
+    unawaited(checkAndMaybeSwitch());
+  }
+
+  /// Probe current base; if unreachable, switch to the first reachable
+  /// candidate and persist. Throttled to one probe per 30 s so it is safe
+  /// to call from every network-failure catch and poll tick.
+  static Future<void> checkAndMaybeSwitch() async {
+    if (_probing) return;
+    if (DateTime.now().difference(_lastProbe).inSeconds < 30) return;
+    _probing = true;
+    _lastProbe = DateTime.now();
+    try {
+      if (await _reachable(_current)) return;
+      for (final c in candidates) {
+        if (c == _current) continue;
+        if (await _reachable(c)) {
+          _current = c;
+          try {
+            final sp = await SharedPreferences.getInstance();
+            await sp.setString('talk_api_base', c);
+          } catch (_) {}
+          return;
+        }
+      }
+    } finally {
+      _probing = false;
+    }
+  }
+
+  static Future<bool> _reachable(String base) async {
+    try {
+      final r = await http
+          .get(Uri.parse('$base/api/health'))
+          .timeout(const Duration(seconds: 5));
+      return r.statusCode < 500;
+    } on SocketException {
+      return false; // DNS or connect failure — the case we exist for
+    } on TimeoutException {
+      return false;
+    } catch (_) {
+      // TLS/HTTP-level oddity still means DNS + TCP worked — keep base.
+      return true;
+    }
+  }
+}

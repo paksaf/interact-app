@@ -17,8 +17,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 
 import 'auth_service.dart';
+import 'api_base.dart';
 
-const _kBase = 'https://qurbanisahulat.com';
+String get _kBase => ApiBase.current;
 const _kTimeout = Duration(seconds: 20);
 
 /// Roles an attendee can request. Host is implied by [LiveApi.token]'s

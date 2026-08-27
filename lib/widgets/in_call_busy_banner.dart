@@ -53,7 +53,19 @@ class _InCallBusyBannerState extends ConsumerState<InCallBusyBanner> {
   @override
   Widget build(BuildContext context) {
     final text = _text;
-    if (text == null) return const SizedBox.shrink();
+    // ⚠️ ALWAYS return a Positioned — never a bare SizedBox.shrink().
+    // This widget sits directly inside each call screen's root Stack, whose
+    // every other child is Positioned. A Stack sizes itself to its
+    // NON-positioned children; a lone 0×0 non-positioned child collapsed the
+    // ENTIRE Stack to 0×0 (and Stack clips by default), rendering every call
+    // screen as a blank Scaffold background on iOS AND Android — the
+    // "black call screen" outage of 2026-08. Root-caused via frame telemetry
+    // + a red scaffold + a full-screen-red screenshot; see
+    // docs/runbooks/CASE_TALK_BLACK_VIDEO_2026-08-27.md.
+    if (text == null) {
+      return const Positioned(
+          top: 0, left: 0, width: 0, height: 0, child: SizedBox.shrink());
+    }
     return Positioned(
       top: widget.top,
       left: 16,

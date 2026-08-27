@@ -135,7 +135,13 @@ dependencies:
   # chat or invite. Read-only usage (fetch with phones); we never write or
   # upload the address book — the chosen number goes straight to
   # createDirectThread / InviteSheet, same as the manual-entry path.
-  flutter_contacts: ^1.1.9+2
+  # Path dep: pub 1.1.9+2 force-unwraps AppDelegate.window in register() and
+  # EXC_BREAKPOINTs under UISceneDelegate (flutter_contacts#209/#230). Local
+  # copy patches register() to resolve the root VC from connected scenes.
+  # Cap stays on 1.x — 2.x needs Flutter≥3.32 and breaks with use_frameworks!
+  # module clashes on this project's iOS embedding.
+  flutter_contacts:
+    path: packages/flutter_contacts
 
   # ── Camera effects / virtual background (Zoom/Meet-style) ───────────
   # Pinned to the same majors interact-maps ships (READ-only donor whose
@@ -197,6 +203,13 @@ dependencies:
 # both. We don't actually USE Linux here (Android/iOS only) but the
 # Dart resolver chokes anyway. Same override interact_pro uses.
 dependency_overrides:
+  # 2026-08-27 (evening): flutter_webrtc REVERTED 1.6.0 → 1.4.0. The 1.6
+  # upgrade was made chasing the black-tile bug, whose true cause was the
+  # busy-banner Stack collapse (CASE_TALK_BLACK_VIDEO_2026-08-27) — the
+  # renderer was innocent. 1.5+'s AVAudioEngine ADM broke call audio BOTH
+  # ways on iOS (audioBytes out=0, playout silent; upstream shape:
+  # flutter-webrtc#1996). 1.4.0's ADM is the version this app's audio has
+  # always worked on. RTCVideoPlatFormView (iOS renderer) exists in 1.4 too.
   record_linux: ^1.3.0
 
 dev_dependencies:

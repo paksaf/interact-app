@@ -285,7 +285,7 @@ class _ContactsTabState extends ConsumerState<ContactsTab> {
       final tok = await ref.read(talkApiProvider).createRoom();
       final code = tok.roomId.split(':').last;
       if (!context.mounted) return;
-      context.push('/room?code=$code&host=true');
+      context.push('/precall?code=$code&host=true');
     } catch (e) {
       messenger.showSnackBar(
         SnackBar(content: Text('Could not place call: $e')),

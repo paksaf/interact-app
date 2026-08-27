@@ -16,15 +16,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 
 import 'auth_service.dart';
+import 'api_base.dart';
 
 /// Talk backend base URL. Env-configurable (2026-07-02 connectivity canon)
 /// so dev/staging builds don't hit production; defaults to the current
 /// production host — zero behaviour change for normal builds.
 /// Override: `--dart-define=INTERACT_TALK_API_BASE=https://staging.example`.
-const _kBase = String.fromEnvironment(
-  'INTERACT_TALK_API_BASE',
-  defaultValue: 'https://qurbanisahulat.com',
-);
+String get _kBase => ApiBase.current;
 
 /// Optional ephemeral-TURN mint endpoint (coturn REST-API scheme — same
 /// contract as interactpak-nextjs /api/turn/credential and

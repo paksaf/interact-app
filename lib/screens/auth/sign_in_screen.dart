@@ -168,12 +168,17 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
       }
 
       if (!result.delivered) {
+        final alt = switch (channel) {
+          'whatsapp' => 'Try SMS or Email instead.',
+          'sms' => 'Try WhatsApp or Email instead.',
+          _ => 'Try WhatsApp or SMS instead.',
+        };
         setState(() {
           _otpSent = false;
           _error =
               'Could not deliver via $_channelLabel'
               '${result.provider != null ? ' (${result.provider})' : ''}.\n\n'
-              'Try WhatsApp or Email instead.';
+              '$alt';
         });
         return;
       }

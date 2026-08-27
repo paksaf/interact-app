@@ -64,7 +64,11 @@ class _CallsTabState extends ConsumerState<CallsTab> {
       // createRoom() — we don't need the code from talk_api here, the
       // route handles it. Pass mode for voice-only meetings.
       if (!mounted) return;
-      context.push('/room?host=true&mode=$mode');
+      // Video rooms go via the pre-call self-view (2026-08-27);
+      // voice-only has no camera to preview.
+      context.push(mode == 'video'
+          ? '/precall?host=true&mode=video'
+          : '/room?host=true&mode=$mode');
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

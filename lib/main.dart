@@ -31,6 +31,7 @@ import 'screens/chat/chat_thread_loader.dart';
 import 'screens/chat/communities_screen.dart';
 import 'screens/chat/new_group_screen.dart';
 import 'screens/meeting/meeting_room_screen.dart';
+import 'screens/meeting/pre_call_preview_screen.dart';
 import 'screens/meeting/call_room_livekit_screen.dart';
 import 'screens/meeting/incoming_call_screen.dart';
 import 'screens/meeting/invite_screen.dart';
@@ -54,9 +55,13 @@ import 'services/auth_service.dart';
 import 'services/push_service.dart';
 import 'services/callkit_service.dart';
 import 'services/notification_service.dart';
+import 'services/api_base.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // DNS-failover base resolver: restore last-known-good API host and
+  // verify it in the background (see services/api_base.dart).
+  await ApiBase.init();
   // FCM for background/killed call ring. Fail-soft: if google-services.json /
   // Firebase isn't configured yet, the app still runs (ring stays foreground-only).
   // Lifestyle donor: register the background handler BEFORE runApp.
@@ -253,6 +258,13 @@ final _router = GoRouter(
     GoRoute(
         path: '/camera-effects',
         builder: (_, __) => const CameraEffectsScreen()),
+    // Pre-call self-view (2026-08-27): check appearance/background before an
+    // ad-hoc video room. Forwards its whole query string to /room on Start.
+    GoRoute(
+      path: '/precall',
+      builder: (ctx, st) =>
+          PreCallPreviewScreen(roomQuery: st.uri.query),
+    ),
     GoRoute(
         path: '/offline-lan',
         builder: (_, __) => const OfflineLanScreen()),

@@ -10,6 +10,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/chat.dart';
+import 'api_base.dart';
 import 'chat_api.dart';
 import 'notification_service.dart';
 
@@ -49,7 +50,11 @@ class MessageWatcher {
     try {
       threads = await _api.listAllThreads();
     } catch (_) {
-      return; // offline / 401 — try again next tick
+      // offline / 401 / DNS failure — kick the base-URL failover probe
+      // (throttled internally) so a resolver outage self-heals, then
+      // try again next tick.
+      unawaited(ApiBase.checkAndMaybeSwitch());
+      return;
     }
     // Only raise a SYSTEM notification when the app is backgrounded/paused —
     // in-app you already see messages in the UI, so a buzz+sound each poll tick

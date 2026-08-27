@@ -30,6 +30,11 @@ flutter_ios_podfile_setup
 target 'Runner' do
   use_frameworks!
 
+  # TensorFlowLiteSwift 2.12.0's trunk podspec clones the FULL tensorflow.git
+  # repo (multi-GB). Use the CocoaPods-cached Swift sources via a local path
+  # pod so `pod install` stays bounded. Same version ML Kit already pins.
+  pod 'TensorFlowLiteSwift', :path => 'LocalPods/TensorFlowLiteSwift'
+
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
   target 'RunnerTests' do
     inherit! :search_paths
@@ -41,6 +46,12 @@ post_install do |installer|
     flutter_additional_ios_build_settings(target)
     target.build_configurations.each do |config|
       config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.5'
+      # Google pods (GoogleToolboxForMac, GoogleDataTransport) use quoted
+      # includes in framework headers; Xcode 26 flags that as an ERROR once
+      # the Pods project picks up "recommended settings" (happened
+      # 2026-08-27 when the workspace was opened in Xcode). Keep it a
+      # warning so pod code we don't own can't fail the build.
+      config.build_settings['CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER'] = 'NO'
     end
   end
 end

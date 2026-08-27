@@ -24,16 +24,14 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
 import '../utils/phone_normalize.dart';
+import 'api_base.dart';
 
 const _kBase = 'https://www.interactpak.com'; // apex redirects to www
 
 /// Talk backend that mints + verifies the offline-durable session (refresh
 /// token + short access token). Same host the chat/talk APIs hit; the
 /// interactpak-minted JWT verifies here via shared INTERACT_AUTH_SECRET.
-const _kSahulatBase = String.fromEnvironment(
-  'INTERACT_TALK_API_BASE',
-  defaultValue: 'https://qurbanisahulat.com',
-);
+String get _kSahulatBase => ApiBase.current;
 
 /// Network timeout for auth calls. Without this the Send-code / Verify
 /// buttons spin forever when the device can't reach the server — the exact
@@ -54,12 +52,23 @@ Future<http.Response> _postJson(String url, Map<String, dynamic> body) async {
         .timeout(_kAuthTimeout);
   } on TimeoutException {
     throw Exception(
-        'Couldn’t reach INTERACT (timed out). Check this device’s internet '
-        'and DNS, then try again.');
-  } on SocketException {
+        'Couldn’t reach INTERACT (timed out). Check Wi‑Fi or Cellular, '
+        'then try again. Email login also works if SMS/WhatsApp is slow.');
+  } on SocketException catch (e) {
+    // DNS/connect failure — kick the base-URL failover probe (throttled)
+    // so the user's next retry can land on the fallback host.
+    unawaited(ApiBase.checkAndMaybeSwitch());
+    final detail = (e.osError?.message ?? e.message).trim();
     throw Exception(
-        'No connection to INTERACT. Check Wi-Fi/DNS on this device '
-        '(try DNS 8.8.8.8), then try again.');
+        'No connection to INTERACT'
+        '${detail.isNotEmpty ? ' ($detail)' : ''}.\n\n'
+        '• Turn on Wi‑Fi or Cellular Data for Talk\n'
+        '• If Wi‑Fi has no internet, switch to mobile data\n'
+        '• Then try WhatsApp again, or use Email');
+  } on HandshakeException catch (e) {
+    throw Exception(
+        'Secure connection to INTERACT failed (${e.message}). '
+        'Check the date/time on this device, then try again.');
   } on http.ClientException catch (e) {
     throw Exception('Network error: ${e.message}. Check this device’s connection.');
   }
@@ -473,7 +482,7 @@ class AuthService {
       // Sahulat/Talk is the source of truth for phone↔admin identity.
       final res = await http
           .get(
-            Uri.parse('https://qurbanisahulat.com/api/v1/auth/me'),
+            Uri.parse('${ApiBase.current}/api/v1/auth/me'),
             headers: {
               'Authorization': 'Bearer $t',
               'Accept': 'application/json',

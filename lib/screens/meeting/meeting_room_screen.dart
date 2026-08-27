@@ -13,6 +13,7 @@
 //     Phase 2 adds anonymous in-room messages via ws data channel
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -25,6 +26,9 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../../services/auth_service.dart';
+import 'package:permission_handler/permission_handler.dart';
+
+import '../../services/api_base.dart';
 import '../../services/call_signaling.dart';
 import '../../services/callkit_service.dart';
 import '../../services/talk_api.dart';
@@ -70,7 +74,17 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
   final _localRenderer = RTCVideoRenderer();
   final _remoteRenderer = RTCVideoRenderer();
   RTCPeerConnection? _pc;
+  // Gesture data channels (2026-08-27): the deployed relay only speaks
+  // join/offer/answer/ice-candidate and ERRORS on app frames ("Unknown
+  // message type: hand"), so reactions/hand-raise ride a WebRTC DATA
+  // CHANNEL — P2P, survives TURN relay, no server change. Both sides
+  // create one and also accept the peer's; send picks whichever is open.
+  RTCDataChannel? _dcLocal;
+  RTCDataChannel? _dcRemote;
   MediaStream? _localStream;
+  /// Remote stream kept as a field (not only inside _remoteRenderer) so the
+  /// iOS PlatformView renderer can bind it in onViewReady — see _videoView().
+  MediaStream? _remoteStream;
   WebSocketChannel? _ws;
   StreamSubscription? _wsSub;
 
@@ -79,6 +93,10 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
   // used to kill signaling for the rest of the call. 20 s app-level ping
   // + exponential-backoff reconnect (cap 30 s, jittered) fix both.
   Timer? _keepalive;
+  Timer? _statsProbe;
+  int _zeroVideoPolls = 0;
+  bool _relayFallbackDone = false;
+  List<Map<String, dynamic>> _iceServersUsed = const [];
   // ICE-restart recovery (see onConnectionState): true while the peer
   // connection is Disconnected/Failed; opens the renegotiation path.
   bool _pcDown = false;
@@ -89,6 +107,11 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
   int _wsRetry = 0;
   bool _hungUp = false;
   String? _wsUri; // remembered for reconnect
+  /// DNS-failover twin of [_wsUri]: same signaling relay, tunneled through
+  /// the API host the app already reached (Caddy proxies /rtc-ws → :8765).
+  /// Some ISP resolvers intermittently fail signal.interactpak.com (errno 8,
+  /// observed 2026-08-26) — reconnect attempts alternate primary/fallback.
+  String? _wsFallbackUri;
 
   bool _videoOn = true;
   bool _audioOn = true;
@@ -290,6 +313,47 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
       // Local media. Audio uses WebRTC's built-in DSP (P2 noise suppression):
       // echo cancellation + noise suppression + auto gain — huge for noisy
       // field/site calls. These are hints; the platform enables what it can.
+      // 2026-08-26: explicitly request camera/mic BEFORE getUserMedia.
+      // On iOS a denied (or never-granted) camera permission makes
+      // flutter_webrtc return an AUDIO-ONLY stream with NO error — the
+      // exact "voice works, tiles black" bug. Requesting here forces the
+      // system prompt and surfaces denial as a visible, actionable error.
+      final micPerm = await Permission.microphone.request();
+      final camPerm = _videoOn ? await Permission.camera.request() : null;
+      debugPrint('[call] perms mic=$micPerm cam=$camPerm videoOn=$_videoOn');
+      // NOTE: permission_handler can report permanentlyDenied as a STUB on
+      // iOS when its Podfile macros aren't compiled in — Settings showed both
+      // toggles ON while it reported denied (2026-08-27). Log only; trust
+      // getUserMedia's actual track output instead of showing a false banner.
+
+      // iOS audio session (2026-08-27, "no sound" after flutter_webrtc 1.6):
+      // the 1.5+ AVAudioEngine ADM no longer configures the AVAudioSession
+      // implicitly the way 1.4 did — without an explicit playAndRecord
+      // category the call can be SILENT both ways (mic not captured, no
+      // playout) while video flows fine. Video calls default to the
+      // loudspeaker; voice-only keeps the earpiece (voiceChat mode).
+      // Bluetooth options let headsets/earbuds route automatically.
+      if (Platform.isIOS) {
+        try {
+          await AppleNativeAudioManagement.setAppleAudioConfiguration(
+            AppleAudioConfiguration(
+              appleAudioCategory: AppleAudioCategory.playAndRecord,
+              appleAudioCategoryOptions: {
+                AppleAudioCategoryOption.allowBluetooth,
+                AppleAudioCategoryOption.allowBluetoothA2DP,
+                if (_videoOn) AppleAudioCategoryOption.defaultToSpeaker,
+              },
+              appleAudioMode:
+                  _videoOn ? AppleAudioMode.videoChat : AppleAudioMode.voiceChat,
+            ),
+          );
+          debugPrint('[call] apple audio session configured '
+              '(${_videoOn ? "videoChat+speaker" : "voiceChat"})');
+        } catch (e) {
+          debugPrint('[call] apple audio config failed: $e');
+        }
+      }
+
       _localStream = await navigator.mediaDevices.getUserMedia({
         'audio': {
           'echoCancellation': true,
@@ -300,7 +364,22 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
             ? {'facingMode': 'user', 'width': 1280, 'height': 720}
             : false,
       });
+      debugPrint('[call] local tracks: '
+          '${_localStream!.getTracks().map((t) => '${t.kind}:${t.enabled}').join(', ')}');
       _localRenderer.srcObject = _localStream;
+
+      // Route audio to the LOUDSPEAKER for video calls (voice-only mode keeps
+      // the earpiece, like a phone call). flutter_webrtc ≥1.5's AVAudioEngine
+      // ADM no longer defaults video chats to the speaker the way 1.4 did —
+      // without this, calls sound "silent" unless the phone is held to the
+      // ear (observed 2026-08-27 after the 1.6.0 upgrade, iPhone + A23).
+      if (_videoOn) {
+        try {
+          await Helper.setSpeakerphoneOn(true);
+        } catch (e) {
+          debugPrint('[call] speakerphone routing failed: $e');
+        }
+      }
 
       // ICE servers: prefer a server-minted ephemeral TURN credential
       // (fetchEphemeralTurnIceServer — off by default, enabled via
@@ -317,17 +396,68 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
         ];
       }
 
+      // DNS-resilience (2026-08-26): clone every TURN/STUN entry that names
+      // turn.interactpak.com with an IP-literal twin — coturn's static-secret
+      // auth is hostname-agnostic, and turn:/stun: URIs don't do TLS hostname
+      // verification, so the relay stays reachable when the ISP resolver
+      // flakes (same errno-8 family as the signaling fallback above).
+      iceServers = [
+        ...iceServers,
+        for (final srv in iceServers)
+          if (srv is Map &&
+              srv['urls'] != null &&
+              srv['urls'].toString().contains('turn.interactpak.com'))
+            {
+              ...srv,
+              'urls': (srv['urls'] is List)
+                  ? [
+                      for (final u in (srv['urls'] as List))
+                        u.toString().replaceAll(
+                            'turn.interactpak.com', '178.105.73.238'),
+                    ]
+                  : srv['urls']
+                      .toString()
+                      .replaceAll('turn.interactpak.com', '178.105.73.238'),
+            },
+      ];
+
       // Peer connection.
+      // INTERACT_FORCE_RELAY=1 (dart-define): route ALL media via the TURN
+      // relay. Diagnostic + workaround for NAT-hairpin paths that pass audio
+      // but drop large video UDP packets (srflx<->srflx on the same router,
+      // observed 2026-08-27: audio fine, zero video frames both ways).
+      const forceRelay =
+          String.fromEnvironment('INTERACT_FORCE_RELAY', defaultValue: '0');
+      _iceServersUsed = List<Map<String, dynamic>>.from(
+          iceServers.map((e) => Map<String, dynamic>.from(e as Map)));
       _pc = await createPeerConnection({
         'iceServers': iceServers,
         'sdpSemantics': 'unified-plan',
+        if (forceRelay == '1') 'iceTransportPolicy': 'relay',
       });
+      if (forceRelay == '1') debugPrint('[call] ICE policy: RELAY-ONLY');
 
       _localStream!.getTracks().forEach((t) => _pc!.addTrack(t, _localStream!));
 
+      try {
+        _dcLocal = await _pc!.createDataChannel(
+            'talk-gestures', RTCDataChannelInit()..ordered = true);
+        _dcLocal!.onMessage = _onGestureMessage;
+      } catch (e) {
+        debugPrint('[call] gesture data channel create failed: $e');
+      }
+      _pc!.onDataChannel = (dc) {
+        _dcRemote = dc;
+        dc.onMessage = _onGestureMessage;
+      };
+
       _pc!.onTrack = (event) {
+        debugPrint('[call] onTrack kind=${event.track.kind} streams=${event.streams.length}');
         if (event.streams.isNotEmpty) {
-          setState(() => _remoteRenderer.srcObject = event.streams.first);
+          setState(() {
+            _remoteStream = event.streams.first;
+            _remoteRenderer.srcObject = event.streams.first;
+          });
         }
       };
 
@@ -389,6 +519,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
       // We only NORMALIZE the path to `/ws`, which is the path the signaling
       // server upgrades on (the minted URL omits it).
       _wsUri = _normalizeSignalUrl(tok.wsUrl);
+      _wsFallbackUri = _buildWsFallback(_wsUri);
       _roomId = tok.roomId; // sent in the explicit `join` (server proto)
       // Mint our OWN unique userId — the open relay assigns nothing; roomId +
       // userId are both required in `join`, and the id just needs to be
@@ -452,9 +583,26 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
   /// Connect (or re-connect) the signaling WebSocket. Reused by the
   /// backoff reconnect path — the peer connection is left untouched so an
   /// established ICE path keeps flowing while signaling heals.
+  /// Same token/query, but host = current API base and path = /rtc-ws
+  /// (Caddy rewrites to /ws and proxies to the signaling relay).
+  String? _buildWsFallback(String? primary) {
+    if (primary == null) return null;
+    try {
+      final u = Uri.parse(primary);
+      final api = Uri.parse(ApiBase.current);
+      if (u.host == api.host) return null; // already same host — no twin
+      return u.replace(host: api.host, port: 443, path: '/rtc-ws').toString();
+    } catch (_) {
+      return null;
+    }
+  }
+
   void _connectSignaling() {
-    final uri = _wsUri;
+    final alt = _wsFallbackUri;
+    // Attempt 0 (and even retries) → primary; odd retries → fallback host.
+    final uri = (alt != null && _wsRetry.isOdd) ? alt : _wsUri;
     if (uri == null || _hungUp) return;
+    debugPrint('[call] ws via ${Uri.parse(uri).host}${Uri.parse(uri).path}');
     _wsSub?.cancel();
     _ws = WebSocketChannel.connect(Uri.parse(uri));
     _wsSub = _ws!.stream.listen(
@@ -487,6 +635,80 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
     _keepalive?.cancel();
     _keepalive = Timer.periodic(const Duration(seconds: 20), (_) {
       _wsSend({'type': 'ping', 'ts': DateTime.now().millisecondsSinceEpoch});
+    });
+    // Video frame-flow probe: every 5 s log RTP video bytes both directions —
+    // distinguishes "track present but no frames" from a rendering bug.
+    _statsProbe?.cancel();
+    _statsProbe = Timer.periodic(const Duration(seconds: 5), (_) async {
+      final pc = _pc;
+      if (pc == null) return;
+      try {
+        final stats = await pc.getStats();
+        int vOut = 0, vIn = 0, aOut = 0, aIn = 0;
+        for (final r in stats) {
+          final v = r.values;
+          final isVideo = v['kind'] == 'video' || v['mediaType'] == 'video';
+          final isAudio = v['kind'] == 'audio' || v['mediaType'] == 'audio';
+          if (r.type == 'outbound-rtp') {
+            final b = (v['bytesSent'] as num?)?.toInt();
+            if (b != null) {
+              if (isVideo) vOut = b;
+              if (isAudio) aOut = b;
+            }
+          }
+          if (r.type == 'inbound-rtp') {
+            final b = (v['bytesReceived'] as num?)?.toInt();
+            if (b != null) {
+              if (isVideo) vIn = b;
+              if (isAudio) aIn = b;
+            }
+          }
+        }
+        debugPrint(
+            '[call] videoBytes out=$vOut in=$vIn · audioBytes out=$aOut in=$aIn');
+        // AUTO-RELAY FALLBACK (2026-08-27): connected call, video on, but
+        // ZERO inbound video for 2 consecutive polls (~10 s) while audio
+        // works — the router's hairpin path is eating large video packets
+        // (client isolation ⇒ srflx↔srflx; observed on the HS8145C5).
+        // Switch this pc to TURN-relay-only and ICE-restart: media re-routes
+        // via the VPS relay and video starts flowing. One-shot per call.
+        // Use OUR OWN connection tracking (_connecting/_pcDown), not
+        // pc.connectionState — that getter is null on some flutter_webrtc
+        // builds, which silently disabled this fallback (2026-08-27).
+        if (!_relayFallbackDone &&
+            !_connecting &&
+            !_pcDown &&
+            _videoOn &&
+            vIn == 0) {
+          _zeroVideoPolls++;
+          if (_zeroVideoPolls >= 2) {
+            _relayFallbackDone = true;
+            debugPrint('[call] no video frames on direct path — '
+                'switching to TURN relay + ICE restart');
+            if (mounted) {
+              ScaffoldMessenger.maybeOf(context)?.showSnackBar(const SnackBar(
+                  content: Text('Optimizing video route…'),
+                  duration: Duration(seconds: 2)));
+            }
+            try {
+              await pc.setConfiguration({
+                'iceServers': _iceServersUsed,
+                'sdpSemantics': 'unified-plan',
+                'iceTransportPolicy': 'relay',
+              });
+              // Reuse the restart path: mark down + restart (offerer side
+              // re-offers; answerer's guard accepts the restart offer).
+              _pcDown = true;
+              _iceRestarts = 0;
+              await _attemptIceRestart();
+            } catch (e) {
+              debugPrint('[call] relay fallback failed: $e');
+            }
+          }
+        } else if (vIn > 0) {
+          _zeroVideoPolls = 0;
+        }
+      } catch (_) {}
     });
   }
 
@@ -619,14 +841,43 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
     });
   }
 
+  void _onGestureMessage(RTCDataChannelMessage msg) {
+    try {
+      final m = jsonDecode(msg.text) as Map<String, dynamic>;
+      final type = m['type'];
+      if (type == 'reaction') {
+        final e = m['emoji'] as String?;
+        if (e != null) _flashReaction(e);
+      } else if (type == 'hand') {
+        if (mounted) setState(() => _peerHand = m['up'] == true);
+      }
+    } catch (_) {/* malformed frame — ignore */}
+  }
+
+  void _sendGesture(Map<String, dynamic> m) {
+    const open = RTCDataChannelState.RTCDataChannelOpen;
+    final dc = _dcLocal?.state == open
+        ? _dcLocal
+        : _dcRemote?.state == open
+            ? _dcRemote
+            : null;
+    if (dc != null) {
+      dc.send(RTCDataChannelMessage(jsonEncode(m)));
+    } else {
+      // Channel not open yet — best-effort via the WS (relay errors
+      // harmlessly; peer builds that still listen on WS will catch it).
+      _wsSend(m);
+    }
+  }
+
   void _sendReaction(String emoji) {
-    _wsSend({'type': 'reaction', 'emoji': emoji});
+    _sendGesture({'type': 'reaction', 'emoji': emoji});
     _flashReaction(emoji); // show locally too
   }
 
   void _toggleHand() {
     setState(() => _handRaised = !_handRaised);
-    _wsSend({'type': 'hand', 'up': _handRaised});
+    _sendGesture({'type': 'hand', 'up': _handRaised});
   }
 
   void _showReactionPicker() {
@@ -679,9 +930,11 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
     final Future<void>? cancelInFlight = _sendCancelIfNeeded();
     final Future<void>? logClose = _closeCallLogIfNeeded();
     _noAnswerTimer?.cancel();
+    _statsProbe?.cancel();
     _keepalive?.cancel();
     _reconnectTimer?.cancel();
     _iceRestartTimer?.cancel();
+
     // Clear native CallKit / Telecom so a stale "accepted" entry can't
     // re-open /room on every cold start (seen on device as endless
     // "Connecting…" after force-stop / reinstall).
@@ -692,8 +945,14 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
     unawaited(CallKitService.endAllCalls());
     await _wsSub?.cancel();
     await _ws?.sink.close();
+    try { await _dcLocal?.close(); } catch (_) {}
+    try { await _dcRemote?.close(); } catch (_) {}
     await _pc?.close();
     _localStream?.getTracks().forEach((t) => t.stop());
+    // Null the stream fields BEFORE disposing the renderers so any rebuild
+    // racing the teardown can't hand a dead stream to a platform view.
+    _localStream = null;
+    _remoteStream = null;
     await _localRenderer.dispose();
     await _remoteRenderer.dispose();
     WakelockPlus.disable();
@@ -1140,6 +1399,24 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
     );
   }
 
+  /// Video tile renderer — the plain texture path on ALL platforms.
+  ///
+  /// History (2026-08-27, CASE_TALK_BLACK_VIDEO): iOS was temporarily moved
+  /// to `RTCVideoPlatFormView` while chasing the black-call-screen bug. The
+  /// real cause turned out to be the busy-banner Stack collapse (pure Dart,
+  /// fixed in InCallBusyBanner) — the texture renderer was never guilty.
+  /// On flutter_webrtc 1.4 (the pinned version whose AUDIO works — see
+  /// pubspec) the early iOS PlatformView implementation crashed the app at
+  /// call connect, so we returned to RTCVideoView everywhere: the exact
+  /// configuration that has always worked.
+  Widget _videoView(RTCVideoRenderer renderer, MediaStream? stream,
+      {bool mirror = false, Key? key}) {
+    return RTCVideoView(renderer,
+        key: key,
+        mirror: mirror,
+        objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover);
+  }
+
   @override
   Widget build(BuildContext context) {
     // Post-call panel (Call again / Back to chat) — rendered as a fully
@@ -1155,18 +1432,19 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
             // connecting on a VIDEO call, show the caller's OWN camera preview
             // full-screen (mirrored) so they can see what they're about to
             // show — not a black screen. Falls back to black.
+            // Slot keys on the Stack children: conditional siblings (overlay,
+            // hand badge, emoji flash) appear/disappear and would otherwise
+            // shift indices and REMOUNT unkeyed neighbours — fatal for
+            // platform views (native view destroyed). Keyed children are
+            // matched by key across rebuilds regardless of position.
             Positioned.fill(
-              child: _remoteRenderer.srcObject != null
-                  ? RTCVideoView(_remoteRenderer,
-                      objectFit:
-                          RTCVideoViewObjectFit.RTCVideoViewObjectFitCover)
-                  : (_connecting &&
-                          _videoOn &&
-                          _localRenderer.srcObject != null)
-                      ? RTCVideoView(_localRenderer,
-                          mirror: true,
-                          objectFit:
-                              RTCVideoViewObjectFit.RTCVideoViewObjectFitCover)
+              key: const ValueKey('slot-bg'),
+              child: _remoteStream != null
+                  ? _videoView(_remoteRenderer, _remoteStream,
+                      key: const ValueKey('pv-remote'))
+                  : (_connecting && _videoOn && _localStream != null)
+                      ? _videoView(_localRenderer, _localStream,
+                          mirror: true, key: const ValueKey('pv-local-bg'))
                       : Container(color: Colors.black),
             ),
             // Connecting overlay (label + spinner + cancel) on top of whatever
@@ -1174,6 +1452,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
             // over the live camera preview.
             if (_error != null)
               Positioned.fill(
+                key: const ValueKey('slot-overlay'),
                 child: Center(
                   child: Text(_error!,
                       style: const TextStyle(color: Colors.white)),
@@ -1181,6 +1460,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
               )
             else if (_connecting)
               Positioned.fill(
+                key: const ValueKey('slot-overlay'),
                 child: Container(
                   color: Colors.black.withValues(alpha: 0.35),
                   child: _buildCallingOverlay(),
@@ -1188,24 +1468,23 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
               ),
             // Local PIP (top-right) — only once connected; while connecting the
             // preview is already shown full-screen above.
-            if (_videoOn && !_connecting)
+            if (_videoOn && !_connecting && _localStream != null)
               Positioned(
+                key: const ValueKey('slot-pip'),
                 top: 16,
                 right: 16,
                 width: 110,
                 height: 160,
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(8),
-                  child: RTCVideoView(
-                    _localRenderer,
-                    mirror: true,
-                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                  ),
+                  child: _videoView(_localRenderer, _localStream,
+                      mirror: true, key: const ValueKey('pv-local-pip')),
                 ),
               ),
             // Peer raised-hand badge (top-center)
             if (_peerHand)
               Positioned(
+                key: const ValueKey('slot-hand'),
                 top: 84,
                 left: 0,
                 right: 0,
@@ -1230,6 +1509,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
             // Emoji reaction flash (center, non-interactive)
             if (_flashEmoji != null)
               Positioned.fill(
+                key: const ValueKey('slot-emoji'),
                 child: IgnorePointer(
                   child: Center(
                     child: Text(_flashEmoji!, style: const TextStyle(fontSize: 110)),
@@ -1238,6 +1518,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
               ),
             // Room / peer chip (top-left) — never show raw thread UUIDs.
             Positioned(
+              key: const ValueKey('slot-chip'),
               top: 16,
               left: 16,
               child: Material(
@@ -1276,6 +1557,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
             const InCallBusyBanner(),
             // Bottom controls
             Positioned(
+              key: const ValueKey('slot-controls'),
               left: 0,
               right: 0,
               bottom: 24,

@@ -25,8 +25,9 @@ import 'package:http/http.dart' as http;
 import '../models/chat.dart';
 import 'auth_service.dart';
 import 'outbox_service.dart';
+import 'api_base.dart';
 
-const _kBase = 'https://qurbanisahulat.com';
+String get _kBase => ApiBase.current;
 
 // ─── envelope helpers ────────────────────────────────────────────────
 // qurbanisahulat wraps responses with `ok(payload)` from src/lib/api-response.ts:

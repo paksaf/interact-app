@@ -20,8 +20,9 @@ import 'package:http/http.dart' as http;
 import 'auth_service.dart';
 import 'callkit_service.dart';
 import 'notification_service.dart';
+import 'api_base.dart';
 
-const _kBase = 'https://qurbanisahulat.com';
+String get _kBase => ApiBase.current;
 const _kAppId = 'com.interactpak.interact_talk';
 
 /// True when this FCM data message is an incoming-call ring.
