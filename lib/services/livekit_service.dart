@@ -15,10 +15,12 @@
 // server-side force-mute is a follow-up via interact-connect RoomService.
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show SocketException;
 
 import 'package:flutter/foundation.dart';
 import 'package:livekit_client/livekit_client.dart';
 
+import 'api_base.dart';
 import 'camera_effects.dart';
 import 'live_api.dart';
 import 'talk_camera_gate.dart';
@@ -231,7 +233,25 @@ class LiveRoomController extends ChangeNotifier {
       // Room is itself a ChangeNotifier (participant/track/speaker changes).
       room.addListener(_onRoomChanged);
 
-      await room.connect(join.url, join.token);
+      // DNS-failover twin of the 1:1 screen's /rtc-ws fallback (2026-08-28).
+      // Some home-router resolvers intermittently fail livekit.interactpak.com
+      // (errno 8) seconds after resolving the API host fine. On a lookup
+      // failure, retry through the API host the app JUST reached — Caddy
+      // proxies /livekit/* → the same LiveKit server — so no second DNS
+      // question is ever asked. See TALK_FEATURES_ROADMAP §16.
+      try {
+        await room.connect(join.url, join.token);
+      } catch (e) {
+        final s = '$e';
+        final dnsFailure = e is SocketException ||
+            s.contains('Failed host lookup') ||
+            s.contains('errno = 8');
+        final fb = _livekitFallbackUrl(join.url);
+        if (!dnsFailure || fb == null) rethrow;
+        debugPrint('[live] DNS failover: ${join.url} unreachable → $fb');
+        unawaited(ApiBase.checkAndMaybeSwitch());
+        await room.connect(fb, join.token);
+      }
 
       // Voice-first: mic on, camera off unless video requested.
       // PTT / hold-to-speak: mic starts off until the walkie button is held.
@@ -550,6 +570,20 @@ class LiveRoomController extends ChangeNotifier {
       // Who-joined panel: re-render roster when a peer publishes its area.
       ..on<ParticipantMetadataUpdatedEvent>((_) => notifyListeners())
       ..on<DataReceivedEvent>(_onData);
+  }
+
+  /// LiveKit URL tunneled through the current API base host (already
+  /// resolved — the token mint on it just succeeded). Null when the join
+  /// URL is already on that host (nothing better to try).
+  String? _livekitFallbackUrl(String original) {
+    try {
+      final api = Uri.parse(ApiBase.current);
+      final orig = Uri.parse(original);
+      if (orig.host == api.host) return null;
+      return 'wss://${api.host}/livekit';
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Merge coarse device area/timezone into our OWN participant metadata
