@@ -408,8 +408,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
       iceServers = [
         ...iceServers,
         for (final srv in iceServers)
-          if (srv is Map &&
-              srv['urls'] != null &&
+          if (srv['urls'] != null &&
               srv['urls'].toString().contains('turn.interactpak.com'))
             {
               ...srv,

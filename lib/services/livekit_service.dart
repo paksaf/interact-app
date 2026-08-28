@@ -44,7 +44,37 @@ class LiveTile {
   final bool handRaised;
   final VideoTrack? videoTrack;
 
+  /// Device-reported plain-English area ("Pakistan · PKT (UTC+5)") from
+  /// participant metadata — display hint only, never authorization.
+  /// Null until the peer's client publishes it (older builds never will).
+  String? area;
+
+  /// Role from the token metadata ("host"/"moderator"/"speaker"/…).
+  String? role;
+
   bool get hasVideo => videoTrack != null;
+}
+
+/// Coarse, permission-free "where is this person" string: locale country +
+/// timezone. Deliberately NOT GPS (no prompt on joining a walkie channel);
+/// city-level location is a future opt-in.
+String deviceAreaString() {
+  const countries = <String, String>{
+    'PK': 'Pakistan', 'AE': 'UAE', 'TR': 'Türkiye', 'RU': 'Russia',
+    'SA': 'Saudi Arabia', 'US': 'USA', 'GB': 'UK', 'CN': 'China',
+    'IN': 'India', 'BD': 'Bangladesh', 'DE': 'Germany', 'QA': 'Qatar',
+    'KW': 'Kuwait', 'OM': 'Oman', 'BH': 'Bahrain', 'MY': 'Malaysia',
+    'ID': 'Indonesia', 'EG': 'Egypt', 'CA': 'Canada', 'AU': 'Australia',
+  };
+  final cc = PlatformDispatcher.instance.locale.countryCode ?? '';
+  final country = countries[cc] ?? (cc.isEmpty ? 'Unknown' : cc);
+  final now = DateTime.now();
+  final off = now.timeZoneOffset;
+  final sign = off.isNegative ? '-' : '+';
+  final h = off.inHours.abs();
+  final m = off.inMinutes.abs() % 60;
+  final utc = 'UTC$sign$h${m == 0 ? '' : ':${m.toString().padLeft(2, '0')}'}';
+  return '$country · ${now.timeZoneName} ($utc)';
 }
 
 /// Data-channel message kinds (JSON over the LiveKit reliable channel).
@@ -126,6 +156,7 @@ class LiveRoomController extends ChangeNotifier {
 
     final lp = room.localParticipant;
     if (lp != null) {
+      final meta = _metaOf(lp);
       out.add(LiveTile(
         identity: lp.identity,
         label: '${_displayName(lp)} (You)',
@@ -134,9 +165,12 @@ class LiveRoomController extends ChangeNotifier {
         audioMuted: !_micOn,
         handRaised: _handRaised,
         videoTrack: _videoOf(lp),
-      ));
+      )
+        ..area = meta['area'] as String?
+        ..role = meta['role'] as String?);
     }
     for (final p in room.remoteParticipants.values) {
+      final meta = _metaOf(p);
       out.add(LiveTile(
         identity: p.identity,
         label: _displayName(p),
@@ -145,9 +179,24 @@ class LiveRoomController extends ChangeNotifier {
         audioMuted: _isAudioMuted(p),
         handRaised: _remoteHands.contains(p.identity),
         videoTrack: _videoOf(p),
-      ));
+      )
+        ..area = meta['area'] as String?
+        ..role = meta['role'] as String?);
     }
     return out;
+  }
+
+  /// Participant metadata (set by the hub token mint, extended by the
+  /// participant's own client with area/tz). Empty map on any parse issue.
+  Map<String, dynamic> _metaOf(Participant p) {
+    final raw = p.metadata;
+    if (raw == null || raw.isEmpty) return const {};
+    try {
+      final d = jsonDecode(raw);
+      return d is Map<String, dynamic> ? d : const {};
+    } catch (_) {
+      return const {};
+    }
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────
@@ -203,6 +252,12 @@ class LiveRoomController extends ChangeNotifier {
           }
         }
       }
+
+      // Who-joined panel: publish this device's coarse area (country +
+      // timezone, no GPS) into our OWN participant metadata so hosts see
+      // who joined from where. Requires the hub's canUpdateOwnMetadata
+      // grant (2026-08-27) — older tokens make this a harmless no-op.
+      unawaited(_publishSelfInfo());
 
       _connected = true;
       _connecting = false;
@@ -492,7 +547,25 @@ class LiveRoomController extends ChangeNotifier {
       ..on<TrackMutedEvent>((_) => notifyListeners())
       ..on<TrackUnmutedEvent>((_) => notifyListeners())
       ..on<ActiveSpeakersChangedEvent>((_) => notifyListeners())
+      // Who-joined panel: re-render roster when a peer publishes its area.
+      ..on<ParticipantMetadataUpdatedEvent>((_) => notifyListeners())
       ..on<DataReceivedEvent>(_onData);
+  }
+
+  /// Merge coarse device area/timezone into our OWN participant metadata
+  /// (keeps the hub-set userId/role/device fields). Best-effort — servers
+  /// minting tokens without canUpdateOwnMetadata simply ignore it.
+  Future<void> _publishSelfInfo() async {
+    try {
+      final lp = _room?.localParticipant;
+      if (lp == null) return;
+      final merged = Map<String, dynamic>.from(_metaOf(lp));
+      merged['area'] = deviceAreaString();
+      merged['joinedAt'] = DateTime.now().toUtc().toIso8601String();
+      await lp.setMetadata(jsonEncode(merged));
+    } catch (e) {
+      debugPrint('[livekit] self-info metadata skipped: $e');
+    }
   }
 
   void _onRoomChanged() => notifyListeners();

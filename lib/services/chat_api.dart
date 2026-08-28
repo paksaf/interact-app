@@ -932,7 +932,17 @@ class ChatApi {
       body: jsonEncode({'username': username}),
     );
     if (res.statusCode == 409) return false;
-    if (res.statusCode >= 400) throw Exception('setUsername failed: ${res.statusCode}');
+    if (res.statusCode >= 400) {
+      // Surface the server's own message (e.g. the handle-format rule) —
+      // "failed: 400" told the operator nothing (2026-08-28).
+      String detail = 'HTTP ${res.statusCode}';
+      try {
+        final b = jsonDecode(res.body);
+        final m = (b is Map) ? b['error'] : null;
+        if (m is Map && m['message'] is String) detail = m['message'] as String;
+      } catch (_) {}
+      throw Exception(detail);
+    }
     return true;
   }
 

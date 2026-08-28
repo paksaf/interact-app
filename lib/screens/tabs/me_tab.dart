@@ -368,20 +368,39 @@ class _MeTabState extends ConsumerState<MeTab> {
         ],
       ),
     );
-    if (v == null || v.isEmpty || !mounted) return;
+    if (v == null || !mounted) return;
+    // Sanitize to the server's rule ([a-z0-9_]{3,32}) instead of bouncing a
+    // 400 back at the user: spaces → underscores, strip everything else.
+    // "Muzafar Ahmed" becomes muzafar_ahmed rather than an error.
+    final handle = v
+        .replaceAll(RegExp(r'\s+'), '_')
+        .replaceAll(RegExp(r'[^a-z0-9_]'), '');
+    if (handle.length < 3 || handle.length > 32) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text(
+              'Handle must be 3–32 characters: letters, numbers, underscore')));
+      return;
+    }
+    final v2 = handle;
     try {
-      final okUp = await ref.read(chatApiProvider).setUsername(v);
+      final okUp = await ref.read(chatApiProvider).setUsername(v2);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content:
-              Text(okUp ? 'Handle set: @$v' : 'That handle is already taken'),
+              Text(okUp ? 'Handle set: @$v2' : 'That handle is already taken'),
         ),
       );
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Could not set handle: $e')));
+        // 404 = the deployed server build predates the handles route
+        // (Sahulat deploy freeze, 2026-08-22). Say so plainly instead of
+        // surfacing a raw status code.
+        final msg = '$e'.contains('404')
+            ? 'Handles need the next server update — coming soon.'
+            : 'Could not set handle: ${'$e'.replaceFirst('Exception: ', '')}';
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(msg)));
       }
     }
   }
@@ -522,14 +541,14 @@ class _MeTabState extends ConsumerState<MeTab> {
               _Tile(
                 icon: Icons.history,
                 label: 'Call history',
-                badge: 'Soon',
-                onTap: () => _comingSoon('Call history'),
+                subtitle: 'All calls with missed/video/voice filters',
+                onTap: () => context.push('/call-history'),
               ),
               _Tile(
                 icon: Icons.block,
                 label: 'Blocked contacts',
-                badge: 'Soon',
-                onTap: () => _comingSoon('Blocked contacts'),
+                subtitle: 'Blocked people can’t call or ring you',
+                onTap: () => context.push('/blocked-contacts'),
               ),
               _Tile(
                 icon: Icons.qr_code_2,

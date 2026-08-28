@@ -35,6 +35,8 @@ import 'screens/meeting/pre_call_preview_screen.dart';
 import 'screens/meeting/call_room_livekit_screen.dart';
 import 'screens/meeting/incoming_call_screen.dart';
 import 'screens/meeting/invite_screen.dart';
+import 'screens/blocked_contacts_screen.dart';
+import 'screens/call_history_screen.dart';
 import 'screens/meeting/dial_pad_screen.dart';
 import 'services/call_signaling.dart';
 import 'services/talk_flags.dart';
@@ -319,6 +321,12 @@ final _router = GoRouter(
     ),
     GoRoute(path: '/invite', builder: (_, __) => const InviteScreen()),
     GoRoute(path: '/dialpad', builder: (_, __) => const DialPadScreen()),
+    GoRoute(
+        path: '/call-history',
+        builder: (_, __) => const CallHistoryScreen()),
+    GoRoute(
+        path: '/blocked-contacts',
+        builder: (_, __) => const BlockedContactsScreen()),
     // Multi-party conference / townhall / walkie (LiveKit SFU).
     GoRoute(
       path: '/townhall',

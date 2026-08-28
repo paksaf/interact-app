@@ -20,6 +20,7 @@ import 'package:http/http.dart' as http;
 
 import 'auth_service.dart';
 import 'api_base.dart';
+import 'block_service.dart';
 
 String get _kBase => ApiBase.current;
 
@@ -47,12 +48,21 @@ class IncomingCall {
       );
 }
 
-final callSignalingProvider =
-    Provider<CallSignaling>((ref) => CallSignaling(ref.read(authServiceProvider)));
+final callSignalingProvider = Provider<CallSignaling>((ref) {
+  final s = CallSignaling(ref.read(authServiceProvider));
+  // Blocked-contacts enforcement (Me → Security & Privacy): invites from a
+  // blocked thread are silently ignored — no ring, caller sees no-answer.
+  s.isBlockedThread = ref.read(blockServiceProvider).isBlocked;
+  return s;
+});
 
 class CallSignaling {
   CallSignaling(this._auth);
   final AuthService _auth;
+
+  /// Injected from blockServiceProvider — returns true when the thread's
+  /// peer is on the local block list. Null-safe default: nothing blocked.
+  bool Function(String? threadId) isBlockedThread = (_) => false;
 
   Timer? _timer;
 
@@ -123,6 +133,10 @@ class CallSignaling {
         final call = IncomingCall.fromJson(inv);
         if (_handled.contains(call.id)) return;
         _handled.add(call.id);
+
+        // Blocked peer → swallow the invite entirely (no ring, no banner,
+        // no respond — the caller's side times out as a normal no-answer).
+        if (isBlockedThread(call.threadId)) return;
 
         if (inCall.value) {
           // Already in a live call — tell the caller we're busy and banner locally.

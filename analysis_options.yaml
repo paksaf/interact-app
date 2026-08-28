@@ -16,6 +16,10 @@ analyzer:
     - windows/**
     - macos/**
     - linux/**
+    # Vendored plugin example apps — not compiled into the APK, and their
+    # dev-deps aren't installed, so they emit ~50 phantom errors (2026-08-28).
+    - packages/flutter_contacts/example/**
+    - packages/flutter_contacts/example_full/**
 include: package:flutter_lints/flutter.yaml
 
 linter:

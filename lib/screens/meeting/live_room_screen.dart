@@ -15,6 +15,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart' as rtc;
 import 'package:go_router/go_router.dart';
 import 'package:livekit_client/livekit_client.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -758,6 +759,14 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
               _ctrl.handRaised ? _ctrl.lowerHand() : _ctrl.raiseHand(),
         ),
       ],
+      // Audio-route picker — deliberately OUTSIDE the !_isPtt guard so the
+      // WALKIE screen has it too (operator report 2026-08-27: walkie had no
+      // way to route to a Bluetooth speaker/headset).
+      _TvControlButton(
+        icon: Icons.volume_up,
+        label: 'Audio',
+        onPressed: _showAudioRouteSheet,
+      ),
       _TvControlButton(
         icon: Icons.people,
         label: 'People',
@@ -787,6 +796,83 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: buttons,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Audio output routing (speaker / earpiece / Bluetooth / AirPlay) —
+  /// same picker as the 1:1 meeting screen, and deliberately the same
+  /// mechanism: flutter_webrtc's Helper. (LiveKit's own
+  /// Hardware.selectAudioOutput is DESKTOP-ONLY — on phones it logs a
+  /// warning and does nothing; verified in v2.8.1 hardware.dart. Only the
+  /// speakerphone toggle goes through Hardware, which handles the iOS
+  /// audio-session config correctly for LiveKit-managed tracks.)
+  Future<void> _showAudioRouteSheet() async {
+    List<rtc.MediaDeviceInfo> outputs = const [];
+    try {
+      outputs = await rtc.Helper.audiooutputs;
+    } catch (e) {
+      debugPrint('[live] enumerate audio outputs failed: $e');
+    }
+    if (!mounted) return;
+    bool speaker = Hardware.instance.speakerOn ?? true;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF14343F),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.all(14),
+                child: Text('Audio output',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700)),
+              ),
+              SwitchListTile(
+                value: speaker,
+                onChanged: (v) async {
+                  setSheet(() => speaker = v);
+                  try {
+                    await Hardware.instance.setSpeakerphoneOn(v);
+                  } catch (e) {
+                    debugPrint('[live] speakerphone toggle failed: $e');
+                  }
+                },
+                title: const Text('Loudspeaker',
+                    style: TextStyle(color: Colors.white)),
+                secondary:
+                    const Icon(Icons.speaker_phone, color: Colors.white70),
+              ),
+              for (final d in outputs)
+                ListTile(
+                  leading: Icon(
+                    d.label.toLowerCase().contains('bluetooth') ||
+                            d.label.toLowerCase().contains('airpods')
+                        ? Icons.bluetooth_audio
+                        : d.label.toLowerCase().contains('speaker')
+                            ? Icons.speaker
+                            : Icons.headset,
+                    color: Colors.white70,
+                  ),
+                  title: Text(d.label.isEmpty ? d.deviceId : d.label,
+                      style: const TextStyle(color: Colors.white)),
+                  onTap: () async {
+                    try {
+                      await rtc.Helper.selectAudioOutput(d.deviceId);
+                    } catch (e) {
+                      debugPrint('[live] selectAudioOutput failed: $e');
+                    }
+                    if (ctx.mounted) Navigator.of(ctx).pop();
+                  },
+                ),
+              const SizedBox(height: 8),
+            ],
           ),
         ),
       ),
@@ -853,6 +939,21 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(color: Colors.white)),
+                    // Who-joined info (host request 2026-08-27): role +
+                    // device-reported coarse area ("Pakistan · PKT (UTC+5)").
+                    // Peers on older builds show role only.
+                    subtitle: (t.role != null || t.area != null)
+                        ? Text(
+                            [
+                              if (t.role != null && t.role!.isNotEmpty) t.role!,
+                              if (t.area != null && t.area!.isNotEmpty) t.area!,
+                            ].join(' — '),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                color: Colors.white54, fontSize: 11),
+                          )
+                        : null,
                     trailing: Row(mainAxisSize: MainAxisSize.min, children: [
                       IconButton(
                         tooltip: _pinnedIdentity == t.identity ? 'Unpin' : 'Pin',

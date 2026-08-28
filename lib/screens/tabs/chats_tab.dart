@@ -17,6 +17,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../models/chat.dart';
 import '../../services/auth_service.dart';
+import '../../services/block_service.dart';
 import '../../services/chat_api.dart';
 import '../../utils/chat_formatters.dart';
 import '../../utils/phone_normalize.dart';
@@ -283,6 +284,49 @@ class _ChatsTabState extends ConsumerState<ChatsTab> {
     return false;
   }
 
+  /// Long-press actions on a chat row. v1: Block / Unblock (local — see
+  /// BlockService). Groups/channels aren't blockable — nothing rings from
+  /// them — so the sheet only shows for 1:1 threads.
+  Future<void> _threadActions(ChatThread t) async {
+    final blocks = ref.read(blockServiceProvider);
+    final isBlocked = blocks.isBlocked(t.id);
+    if (t.isGroup || t.isChannel) return;
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: Icon(isBlocked ? Icons.check_circle_outline : Icons.block,
+                  color: isBlocked ? null : Theme.of(ctx).colorScheme.error),
+              title: Text(isBlocked
+                  ? 'Unblock ${t.title}'
+                  : 'Block ${t.title}'),
+              subtitle: isBlocked
+                  ? null
+                  : const Text('They won\'t be able to call or ring you'),
+              onTap: () =>
+                  Navigator.pop(ctx, isBlocked ? 'unblock' : 'block'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (action == null || !mounted) return;
+    if (action == 'block') {
+      await blocks.block(t.id, t.title);
+    } else {
+      await blocks.unblock(t.id);
+    }
+    if (!mounted) return;
+    setState(() {});
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(action == 'block'
+            ? '${t.title} blocked — manage in Me → Blocked contacts'
+            : '${t.title} unblocked')));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -367,8 +411,10 @@ class _ChatsTabState extends ConsumerState<ChatsTab> {
                   },
                   child: _ThreadTile(
                     thread: t,
+                    blocked: ref.read(blockServiceProvider).isBlocked(t.id),
                     onTap: () =>
                         context.push('/chat/${t.id}', extra: t),
+                    onLongPress: () => _threadActions(t),
                   ),
                 );
               },
@@ -447,9 +493,18 @@ class _ChatsTabState extends ConsumerState<ChatsTab> {
 }
 
 class _ThreadTile extends StatelessWidget {
-  const _ThreadTile({required this.thread, required this.onTap});
+  const _ThreadTile({
+    required this.thread,
+    required this.onTap,
+    this.onLongPress,
+    this.blocked = false,
+  });
   final ChatThread thread;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+
+  /// Locally blocked peer (BlockService) — shows a "Blocked" tag.
+  final bool blocked;
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -495,6 +550,18 @@ class _ThreadTile extends StatelessWidget {
                 ),
               ),
             ),
+            if (blocked)
+              Container(
+                margin: const EdgeInsets.only(left: 6),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                decoration: BoxDecoration(
+                  color: cs.errorContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text('Blocked',
+                    style: TextStyle(fontSize: 10, color: cs.error)),
+              ),
             if (thread.isGroup)
               Padding(
                 padding: const EdgeInsets.only(left: 4),
@@ -552,6 +619,7 @@ class _ThreadTile extends StatelessWidget {
           ],
         ),
         onTap: onTap,
+        onLongPress: onLongPress,
       ),
     );
   }

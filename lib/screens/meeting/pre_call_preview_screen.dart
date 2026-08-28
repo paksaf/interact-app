@@ -119,12 +119,12 @@ class _PreCallPreviewScreenState extends State<PreCallPreviewScreen> {
                   ),
                 ),
               ),
-            Positioned(
-              key: const ValueKey('precall-slot-title'),
+            const Positioned(
+              key: ValueKey('precall-slot-title'),
               top: 56,
               left: 0,
               right: 0,
-              child: const Center(
+              child: Center(
                 child: Text('Check how you look',
                     style: TextStyle(
                         color: Colors.white,
