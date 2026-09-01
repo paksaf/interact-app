@@ -52,9 +52,13 @@ class ApiBase {
   /// Probe current base; if unreachable, switch to the first reachable
   /// candidate and persist. Throttled to one probe per 30 s so it is safe
   /// to call from every network-failure catch and poll tick.
-  static Future<void> checkAndMaybeSwitch() async {
+  /// Pass [force]: true from an explicit Retry so we don't wait out the
+  /// throttle while the user is staring at a DNS error.
+  static Future<void> checkAndMaybeSwitch({bool force = false}) async {
     if (_probing) return;
-    if (DateTime.now().difference(_lastProbe).inSeconds < 30) return;
+    if (!force && DateTime.now().difference(_lastProbe).inSeconds < 30) {
+      return;
+    }
     _probing = true;
     _lastProbe = DateTime.now();
     try {
@@ -75,10 +79,25 @@ class ApiBase {
     }
   }
 
+  /// True when [error] looks like DNS / offline (errno 8 host lookup, etc.).
+  static bool isDnsOrOffline(Object error) {
+    final s = error.toString().toLowerCase();
+    return s.contains('socketexception') ||
+        s.contains('failed host lookup') ||
+        (s.contains('clientexception') && s.contains('host lookup')) ||
+        s.contains('network is unreachable') ||
+        s.contains('nodename nor servname') ||
+        s.contains('errno = 8') ||
+        s.contains('connection timed out') ||
+        s.contains('timed out');
+  }
+
   static Future<bool> _reachable(String base) async {
     try {
+      // Prefer /api/v1/health (200). Bare /api/health is 404 on Sahulat —
+      // still <500, but the v1 route is the real liveness signal.
       final r = await http
-          .get(Uri.parse('$base/api/health'))
+          .get(Uri.parse('$base/api/v1/health'))
           .timeout(const Duration(seconds: 5));
       return r.statusCode < 500;
     } on SocketException {

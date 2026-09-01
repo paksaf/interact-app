@@ -193,6 +193,19 @@ class _TownhallEntryScreenState extends ConsumerState<TownhallEntryScreen> {
                       padding: const EdgeInsets.symmetric(vertical: 16),
                     ),
                   ),
+                  // §14 Phase 1 — the walkie that still works when the site
+                  // router has no uplink. Offered up-front rather than only
+                  // after a failed join: on a known-dead network the operator
+                  // should not have to watch LiveKit time out first.
+                  if (_isPtt) ...[
+                    const SizedBox(height: 12),
+                    TextButton.icon(
+                      onPressed: () => context.push(
+                          '/lan-walkie?code=${Uri.encodeComponent(_codeCtrl.text.trim().toUpperCase())}'),
+                      icon: const Icon(Icons.wifi_tethering),
+                      label: const Text('No internet? Use nearby Wi-Fi'),
+                    ),
+                  ],
                 ],
               ),
             ),

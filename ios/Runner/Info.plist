@@ -104,7 +104,20 @@
 		<array>
 			<string>_mp-connection._tcp</string>
 			<string>_interact-lan._tcp</string>
+			<!-- LAN-offline walkie (roadmap §14). iOS 14+ only browses service
+			     types declared here; an undeclared type fails SILENTLY, which
+			     looks exactly like "nobody is hosting". -->
+			<string>_interact-talk._tcp</string>
 		</array>
+		<!-- The LAN walkie signals over ws:// to a phone's DHCP address on the
+		     same subnet; no CA can issue a cert for that. Local-only relaxation
+		     (Apple-sanctioned) — ATS stays fully enforced for everything else,
+		     and the media itself is DTLS-SRTP regardless. -->
+		<key>NSAppTransportSecurity</key>
+		<dict>
+			<key>NSAllowsLocalNetworking</key>
+			<true/>
+		</dict>
 		<key>NSLocalNetworkUsageDescription</key>
 		<string>INTERACT Talk finds nearby phones on the same Wi‑Fi or via peer-to-peer for offline chat without internet.</string>
 		<key>UIRequiresPersistentWiFi</key>

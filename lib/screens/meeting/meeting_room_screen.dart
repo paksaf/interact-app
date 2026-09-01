@@ -45,6 +45,8 @@ class MeetingRoomScreen extends ConsumerStatefulWidget {
     this.peerName,
     this.peerAvatar,
     this.inviteId,
+    this.lanSignalUrl,
+    this.lanRoomId,
   });
   final String roomCode;
   final bool isHost;
@@ -54,6 +56,18 @@ class MeetingRoomScreen extends ConsumerStatefulWidget {
   /// 'cancel') so the callee's ringing screen auto-dismisses (true remote-
   /// cancel). Null for invite-code rooms / the callee side.
   final String? inviteId;
+
+  /// LAN-OFFLINE mode (roadmap §14 Phase 1). When set, this screen skips the
+  /// cloud token mint entirely and signals against an in-app relay running on
+  /// the host phone (`ws://<host-ip>:<port>/ws`, from [LanWalkieService]).
+  /// The relay speaks the same protocol as the deployed one, so everything
+  /// below this line is unchanged — only the URL and the ICE policy differ:
+  /// no STUN, no TURN, host candidates only, because there is no internet to
+  /// reach them through and both phones are one hop apart.
+  final String? lanSignalUrl;
+
+  /// Room id for the LAN `join` frame — `lan:CODE`. Defaults from [roomCode].
+  final String? lanRoomId;
   /// Optional chat thread anchor — passed through to createRoom() so the
   /// backend can authorise the call via thread participation and
   /// attach the CallLog to this thread. Null when the call is initiated
@@ -296,7 +310,21 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
       // with NO room code, so calling joinRoom('') 404s and the response
       // (non-JSON) blew up as `FormatException` on /talk/rooms/join. Only the
       // invite-code path (no threadId, real code) uses joinRoom.
-      final tok = widget.threadId != null
+      // §14 Phase 1: offline LAN walkie. No network to mint against — we
+      // synthesise the token so the whole signaling path below stays one
+      // code path with the cloud call. token/expiresAt are unused on the
+      // LAN relay (being on the Wi-Fi is the credential); iceServers is
+      // empty on purpose so ICE gathers host candidates only.
+      final lanMode = widget.lanSignalUrl != null;
+      final tok = lanMode
+          ? TalkRoomToken(
+              token: '',
+              wsUrl: widget.lanSignalUrl!,
+              roomId: widget.lanRoomId ?? 'lan:${widget.roomCode}',
+              iceServers: const [],
+              expiresAt: DateTime.now().add(const Duration(hours: 12)),
+            )
+          : widget.threadId != null
           ? await ref.read(talkApiProvider).createRoom(
                 threadId: widget.threadId,
                 mode: widget.mode,
@@ -390,7 +418,9 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
       // --dart-define=INTERACT_TURN_CREDENTIAL_URL=...), falling back to
       // the token's iceServers exactly as before. 2026-07-02.
       var iceServers = tok.iceServers;
-      final eph = await fetchEphemeralTurnIceServer();
+      // Skipped offline: this is an HTTPS round-trip that can only time out
+      // on a router with no uplink, delaying the LAN call by its full budget.
+      final eph = lanMode ? null : await fetchEphemeralTurnIceServer();
       if (eph != null) {
         iceServers = [
           {
@@ -522,7 +552,9 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
       // We only NORMALIZE the path to `/ws`, which is the path the signaling
       // server upgrades on (the minted URL omits it).
       _wsUri = _normalizeSignalUrl(tok.wsUrl);
-      _wsFallbackUri = _buildWsFallback(_wsUri);
+      // The /rtc-ws fallback is a cloud-host trick; on a LAN URL it would
+      // only rewrite a phone's DHCP address into something unreachable.
+      _wsFallbackUri = lanMode ? null : _buildWsFallback(_wsUri);
       _roomId = tok.roomId; // sent in the explicit `join` (server proto)
       // Mint our OWN unique userId — the open relay assigns nothing; roomId +
       // userId are both required in `join`, and the id just needs to be

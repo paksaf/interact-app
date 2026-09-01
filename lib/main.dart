@@ -50,6 +50,7 @@ import 'screens/tabs/contacts_tab.dart';
 import 'screens/tabs/me_tab.dart';
 import 'screens/iot/nearby_ble_devices_screen.dart';
 import 'screens/lan/offline_lan_screen.dart';
+import 'screens/lan/lan_walkie_screen.dart';
 import 'screens/lora/lora_bridge_screen.dart';
 import 'screens/mesh/nearby_mesh_screen.dart';
 import 'screens/debug/field_validation_screen.dart';
@@ -270,6 +271,13 @@ final _router = GoRouter(
     GoRoute(
         path: '/offline-lan',
         builder: (_, __) => const OfflineLanScreen()),
+    // §14 Phase 1 — walkie over the site Wi-Fi with no uplink. ?code= is
+    // pre-filled when we land here as the offline fallback from /live.
+    GoRoute(
+      path: '/lan-walkie',
+      builder: (ctx, st) =>
+          LanWalkieScreen(initialCode: st.uri.queryParameters['code']),
+    ),
     GoRoute(
         path: '/nearby-mesh',
         builder: (_, __) => const NearbyMeshScreen()),

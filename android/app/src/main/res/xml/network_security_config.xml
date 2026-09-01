@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  LAN-offline walkie (roadmap §14). Signaling is ws:// to a phone on the same
+  subnet, where no CA can issue a certificate for a DHCP address.
+
+  Android's network-security-config matches by HOSTNAME ONLY — it has no CIDR
+  syntax — so a private-range exemption cannot be expressed here. What IS
+  expressible (and all that is granted below) is loopback and mDNS .local
+  names; every public host keeps the platform default of cleartext DENIED.
+
+  Open question for the §14 device test: Dart's dart:io sockets are believed
+  NOT to consult this policy (it is enforced by Android's own HTTP stacks),
+  in which case an IP-literal ws:// join works with no change. If the Android
+  joiner instead fails with a cleartext error, the fix is one of:
+    (a) connect by the host's mDNS name (`<name>.local`) — already permitted
+        below, and Bonsoir resolves it, or
+    (b) base-config cleartextTrafficPermitted="true" — a real posture change,
+        operator's call, not to be made silently.
+  Do not widen this file without picking one deliberately.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">local</domain>
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

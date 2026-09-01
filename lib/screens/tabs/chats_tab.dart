@@ -16,6 +16,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../models/chat.dart';
+import '../../services/api_base.dart';
 import '../../services/auth_service.dart';
 import '../../services/block_service.dart';
 import '../../services/chat_api.dart';
@@ -49,7 +50,7 @@ class _ChatsTabState extends ConsumerState<ChatsTab> {
   /// Load threads with a reactive-refresh retry: on a 401 (access token
   /// rejected), silently renew ONCE via the refresh manager and retry. A true
   /// server revoke flips [AuthService.sessionRevoked] → the router redirects to
-  /// sign-in; a network failure keeps us signed in and just surfaces a retry.
+  /// sign-in; a DNS/offline failure fails over [ApiBase] once then retries.
   Future<List<ChatThread>> _loadThreads() async {
     final api = ref.read(chatApiProvider);
     try {
@@ -62,6 +63,13 @@ class _ChatsTabState extends ConsumerState<ChatsTab> {
             outcome == RefreshOutcome.offlineKeep) {
           return api.listAllThreads();
         }
+      }
+      // HS8145C5 / ISP resolvers intermittently fail qurbanisahulat.com
+      // (errno 8) while talk.interactpak.com still resolves — fail over
+      // then retry once so Retry isn't a no-op against the dead host.
+      if (ApiBase.isDnsOrOffline(e)) {
+        await ApiBase.checkAndMaybeSwitch(force: true);
+        return api.listAllThreads();
       }
       rethrow;
     }
@@ -82,6 +90,22 @@ class _ChatsTabState extends ConsumerState<ChatsTab> {
       _threads = f;
     });
     await f;
+  }
+
+  /// User-facing copy — never dump raw ClientException / SocketException.
+  String _chatLoadErrorMessage(Object? error) {
+    final s = (error ?? '').toString();
+    if (s.contains('401')) {
+      return "Couldn't refresh your session just now. Check your "
+          "connection and tap Retry — you're still signed in.";
+    }
+    if (ApiBase.isDnsOrOffline(error ?? s)) {
+      return "Can't reach INTERACT Chat right now (network/DNS). "
+          'Retry switches to a backup host automatically. '
+          'If this keeps happening, set Private DNS to Off or use 8.8.8.8.';
+    }
+    if (s.length > 160) return 'Could not load chats. Tap Retry.';
+    return s.isEmpty ? 'Could not load chats. Tap Retry.' : s;
   }
 
   Future<void> _newMenu() async {
@@ -348,17 +372,10 @@ class _ChatsTabState extends ConsumerState<ChatsTab> {
               return const Center(child: CircularProgressIndicator());
             }
             if (snap.hasError) {
-              // 401 here means a silent refresh was already attempted and did
-              // NOT yield a usable session (offline, or transient server
-              // error) — we are NOT necessarily signed out. A true revoke is
-              // handled by the router redirect, so keep this message soft and
-              // retry-oriented rather than telling the user they're signed out.
-              final unauthorized = snap.error.toString().contains('401');
+              // 401 / DNS: soft copy + Retry (failover runs inside _refresh).
+              // Never surface raw SocketException text to the user.
               return _ErrorState(
-                message: unauthorized
-                    ? "Couldn't refresh your session just now. Check your "
-                        "connection and tap Retry — you're still signed in."
-                    : '${snap.error}',
+                message: _chatLoadErrorMessage(snap.error),
                 onRetry: _refresh,
               );
             }
