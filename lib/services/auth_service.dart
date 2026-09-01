@@ -96,9 +96,7 @@ Future<http.Response> _postJson(String url, Map<String, dynamic> body) async {
         'is slow.');
   }
   final detail = lastErr is SocketException
-      ? ((lastErr as SocketException).osError?.message ??
-              (lastErr as SocketException).message)
-          .trim()
+      ? (lastErr.osError?.message ?? lastErr.message).trim()
       : (lastErr?.toString() ?? '');
   throw Exception(
       'No connection to INTERACT'
