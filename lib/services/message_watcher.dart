@@ -47,12 +47,12 @@ class MessageWatcher {
   Future<void> _tick() async {
     List<ChatThread> threads;
     try {
-      threads = await _api.listAllThreads();
+      // listAllThreads already failovers inside listThreads; still force
+      // a probe+retry here so a mid-poll DNS blip heals within this tick
+      // instead of waiting 12s for the next one.
+      threads = await ApiBase.runWithFailover(_api.listAllThreads);
     } catch (_) {
-      // offline / 401 / DNS failure — kick the base-URL failover probe
-      // (throttled internally) so a resolver outage self-heals, then
-      // try again next tick.
-      unawaited(ApiBase.checkAndMaybeSwitch());
+      unawaited(ApiBase.checkAndMaybeSwitch(force: true));
       return;
     }
     // Only raise a SYSTEM notification when the app is backgrounded/paused —

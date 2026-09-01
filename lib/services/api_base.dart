@@ -14,6 +14,8 @@
 // USAGE: every service reads `ApiBase.current` instead of a const host.
 // Call `ApiBase.init()` once in main(); call `ApiBase.checkAndMaybeSwitch()`
 // fire-and-forget from any network-failure catch (throttled internally).
+// Prefer `ApiBase.runWithFailover` for one-shot GETs that must succeed
+// against whichever host resolves (Chats list, message poll).
 import 'dart:async';
 import 'dart:io';
 
@@ -49,6 +51,17 @@ class ApiBase {
     unawaited(checkAndMaybeSwitch());
   }
 
+  /// Persist [base] as current (must be a known candidate).
+  static Future<void> _adopt(String base) async {
+    if (_current == base) return;
+    if (!candidates.contains(base)) return;
+    _current = base;
+    try {
+      final sp = await SharedPreferences.getInstance();
+      await sp.setString('talk_api_base', base);
+    } catch (_) {}
+  }
+
   /// Probe current base; if unreachable, switch to the first reachable
   /// candidate and persist. Throttled to one probe per 30 s so it is safe
   /// to call from every network-failure catch and poll tick.
@@ -66,16 +79,38 @@ class ApiBase {
       for (final c in candidates) {
         if (c == _current) continue;
         if (await _reachable(c)) {
-          _current = c;
-          try {
-            final sp = await SharedPreferences.getInstance();
-            await sp.setString('talk_api_base', c);
-          } catch (_) {}
+          await _adopt(c);
           return;
         }
       }
     } finally {
       _probing = false;
+    }
+  }
+
+  /// Run [op] against [current]; on DNS/offline, force-failover then retry
+  /// once. [op] must read `ApiBase.current` (or `_kBase`) at call time — not
+  /// capture a stale base URL.
+  static Future<T> runWithFailover<T>(Future<T> Function() op) async {
+    try {
+      return await op();
+    } catch (e) {
+      if (!isDnsOrOffline(e)) rethrow;
+      await checkAndMaybeSwitch(force: true);
+      // If probe kept the same dead host (both down, or race), try each
+      // alternate explicitly so a flaky apex doesn't block talk.* forever.
+      final tried = <String>{_current};
+      for (final c in candidates) {
+        if (tried.contains(c)) continue;
+        await _adopt(c);
+        try {
+          return await op();
+        } catch (e2) {
+          if (!isDnsOrOffline(e2)) rethrow;
+          tried.add(c);
+        }
+      }
+      rethrow;
     }
   }
 

@@ -231,19 +231,21 @@ class ChatApi {
   /// List threads — INTERACT default filter is 'general' (1:1 personal).
   /// Pass `subjectType: 'group'` / `'channel'` for those rooms.
   Future<List<ChatThread>> listThreads({String subjectType = 'general'}) async {
-    final h = await _headers();
-    final res = await http.get(
-      Uri.parse('$_kBase/api/v1/chat/threads?subjectType=$subjectType'),
-      headers: h,
-    );
-    if (res.statusCode >= 400) {
-      throw Exception('listThreads failed: ${res.statusCode}');
-    }
-    final body = jsonDecode(res.body) as Map<String, dynamic>;
-    return _extractList(body)
-        .whereType<Map<String, dynamic>>()
-        .map(ChatThread.fromJson)
-        .toList();
+    return ApiBase.runWithFailover(() async {
+      final h = await _headers();
+      final res = await http.get(
+        Uri.parse('$_kBase/api/v1/chat/threads?subjectType=$subjectType'),
+        headers: h,
+      );
+      if (res.statusCode >= 400) {
+        throw Exception('listThreads failed: ${res.statusCode}');
+      }
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      return _extractList(body)
+          .whereType<Map<String, dynamic>>()
+          .map(ChatThread.fromJson)
+          .toList();
+    });
   }
 
   /// Merge 1:1 + group + channel threads (newest activity first).
