@@ -14,7 +14,6 @@ import 'package:sahl_mesh/sahl_mesh.dart';
 import 'package:sahl_mesh/sahl_mesh_ble.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
-import '../../services/chat_api.dart';
 import '../../services/mesh_cloud_bridge.dart';
 import '../../services/mesh_foreground_service.dart';
 import '../../widgets/branded_app_bar.dart';
@@ -59,15 +58,14 @@ class _NearbyMeshScreenState extends ConsumerState<NearbyMeshScreen> {
         identity: id,
       );
       await node.start();
-      MeshCloudBridge.instance.bind(ref.read(chatApiProvider));
       _sub = node.messages.listen((msg) async {
         if (msg.kind != MeshMessageKind.hello) return;
         final raw = utf8.decode(msg.payload, allowMalformed: true);
         if (!raw.startsWith('talk:')) return;
-        final body = raw.substring(5);
-        final bridged = await MeshCloudBridge.instance.ingestTalkFrame(raw);
+        // Received over BLE mesh — rendered locally only, never re-sent as us.
+        final body = MeshCloudBridge.plainBody(raw) ?? raw.substring(5);
         if (!mounted) return;
-        setState(() => _log.add(bridged ? '←☁ $body' : '← $body'));
+        setState(() => _log.add('← $body'));
       });
       setState(() {
         _node = node;

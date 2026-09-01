@@ -1,82 +1,51 @@
 // SPDX-License-Identifier: AGPL-3.0
 //
-// Mesh / LAN → cloud bridge. When uplink exists, inbound offline frames are
-// forwarded into Talk chat via ChatApi / OutboxService (never a second backend).
+// Offline-frame decoder for LOCAL display. INBOUND ONLY, and it never sends.
 //
-// Payload formats:
-//   talk:0|<peerPhone>|<body>   — open/create DM by phone
-//   talk:1|<threadId>|<body>    — post into an existing thread
-//   talk:<free text>            — parked until user picks a target (no auto)
+// ── Why this file no longer forwards to cloud (2026-09-01 security fix) ──
+//
+// Until now this bridge re-injected every inbound LAN/BLE frame into Talk
+// chat using the LOCAL USER'S credentials (ChatApi.sendText /
+// createDirectThread). Because `lan_service` fed it every unauthenticated
+// inbound TCP frame and `nearby_mesh_screen` every BLE frame, ANY device on
+// the same Wi-Fi or in BLE range could make the victim's phone send an
+// attacker-chosen message to an attacker-chosen number, AS the victim. A
+// classic confused-deputy hole: the app's authority used for the sender's
+// intent. Ed25519 signing in sahl_mesh does not help — it proves frame
+// integrity, not authorisation, and any node can mint an identity.
+//
+// The send path is now REMOVED, not merely disabled — there is no flag to
+// flip it back on. Inbound frames are rendered LOCALLY, attributed to the
+// mesh sender. A relay that re-posts a mesh message to cloud attributed to
+// the ORIGINAL sender (not the local user) is future work: it needs paired,
+// trusted mesh identities AND a backend attribution concept (Sahulat, frozen).
+// See docs/OFFLINE_BEARERS_AUDIT_2026-09-01.md §3 (audit step 6). Do NOT
+// reintroduce a local-user send here.
 
-import 'package:flutter/foundation.dart';
-
-import 'chat_api.dart';
-
+/// Static-only utility (all members static) — not instantiated.
 class MeshCloudBridge {
-  MeshCloudBridge._();
-  static final MeshCloudBridge instance = MeshCloudBridge._();
-
-  ChatApi? _api;
-
-  void bind(ChatApi api) => _api = api;
-
-  /// Parse a `talk:` mesh frame and try to forward to cloud.
-  Future<bool> ingestTalkFrame(String raw) async {
-    final api = _api;
-    if (api == null) return false;
-    final body = raw.startsWith('talk:') ? raw.substring(5) : raw;
-    if (body.isEmpty) return false;
-
-    try {
-      if (body.startsWith('1|')) {
-        final rest = body.substring(2);
-        final sep = rest.indexOf('|');
-        if (sep <= 0) return false;
-        final threadId = rest.substring(0, sep);
-        final text = rest.substring(sep + 1).trim();
-        if (threadId.isEmpty || text.isEmpty) return false;
-        await api.sendText(threadId, text);
-        return true;
-      }
-      if (body.startsWith('0|')) {
-        final rest = body.substring(2);
-        final sep = rest.indexOf('|');
-        if (sep <= 0) return false;
-        final phone = rest.substring(0, sep).trim();
-        final text = rest.substring(sep + 1).trim();
-        if (phone.isEmpty || text.isEmpty) return false;
-        final result = await api.createDirectThread(peerPhone: phone);
-        switch (result) {
-          case DirectThreadFound(:final thread):
-            await api.sendText(thread.id, text);
-            return true;
-          case DirectThreadUnregistered():
-            return false;
-        }
-      }
-      // Free text — no auto-forward without an address.
-      if (kDebugMode) {
-        debugPrint('[mesh-bridge] free-text parked (no target): $body');
-      }
-      return false;
-    } catch (e) {
-      if (kDebugMode) debugPrint('[mesh-bridge] forward failed: $e');
-      return false;
+  /// Strip the `talk:` envelope from an inbound frame for LOCAL display.
+  /// Returns the human-readable text, or null if [raw] is not a talk frame
+  /// (or carries no text). NEVER sends — inbound frames stay on this device.
+  ///
+  /// Envelopes understood (all rendered the same way — as their text):
+  ///   talk:1|<threadId>|<text>
+  ///   talk:0|<phone>|<text>     (recipient hint ignored on inbound by design)
+  ///   talk:<free text>
+  static String? plainBody(String raw) {
+    if (!raw.startsWith('talk:')) return null;
+    var body = raw.substring(5);
+    if (body.startsWith('1|') || body.startsWith('0|')) {
+      final rest = body.substring(2);
+      final sep = rest.indexOf('|');
+      if (sep >= 0) body = rest.substring(sep + 1);
     }
-  }
-
-  /// Best-effort: treat LAN chat body as a talk frame when prefixed.
-  Future<bool> ingestLanBody(String body) async {
     final t = body.trim();
-    if (t.startsWith('talk:')) return ingestTalkFrame(t);
-    return false;
+    return t.isEmpty ? null : t;
   }
 
-  /// Encode an outbound mesh frame for a known thread.
+  /// Encode an OUTBOUND mesh frame for a known thread. Outbound is
+  /// user-initiated and safe; only the inbound auto-send was the hole.
   static String encodeForThread(String threadId, String text) =>
       'talk:1|$threadId|${text.trim()}';
-
-  /// Encode an outbound mesh frame addressed by phone.
-  static String encodeForPhone(String phone, String text) =>
-      'talk:0|$phone|${text.trim()}';
 }

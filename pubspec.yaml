@@ -1,7 +1,7 @@
 name: interact
 description: "INTERACT — voice/video-first, offline-capable, AI-assisted communication super-app. Free, open-source (AGPLv3), Pakistan-first."
 publish_to: "none"
-version: 0.5.15+6054
+version: 0.5.16+6055
 
 environment:
   sdk: ^3.6.0

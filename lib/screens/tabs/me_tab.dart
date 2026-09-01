@@ -620,6 +620,12 @@ class _MeTabState extends ConsumerState<MeTab> {
             subtitle: 'Stay connected with no internet',
             children: [
               _Tile(
+                icon: Icons.travel_explore,
+                label: 'Offline comms hub',
+                subtitle: 'Every no‑internet channel in one place',
+                onTap: () => context.push('/offline-hub'),
+              ),
+              _Tile(
                 icon: Icons.wifi_off,
                 label: 'Offline LAN mode',
                 subtitle: 'Chat & call over the same Wi‑Fi (or Wi‑Fi Direct)',

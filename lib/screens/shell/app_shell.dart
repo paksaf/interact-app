@@ -26,8 +26,6 @@ import '../../services/call_signaling.dart';
 import '../../services/outbox_service.dart';
 import '../../services/push_service.dart';
 import '../../services/auth_service.dart';
-import '../../services/chat_api.dart';
-import '../../services/mesh_cloud_bridge.dart';
 
 class AppShell extends ConsumerStatefulWidget {
   const AppShell({super.key, required this.child});
@@ -97,7 +95,6 @@ class _AppShellState extends ConsumerState<AppShell>
     _calls.start();
     _unread = ref.read(messageWatcherProvider).unreadTotal;
     _unread.addListener(_onUnreadChanged);
-    MeshCloudBridge.instance.bind(ref.read(chatApiProvider));
   }
 
   late final CallSignaling _calls;

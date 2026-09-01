@@ -51,6 +51,7 @@ import 'screens/tabs/me_tab.dart';
 import 'screens/iot/nearby_ble_devices_screen.dart';
 import 'screens/lan/offline_lan_screen.dart';
 import 'screens/lan/lan_walkie_screen.dart';
+import 'screens/offline/offline_hub_screen.dart';
 import 'screens/lora/lora_bridge_screen.dart';
 import 'screens/mesh/nearby_mesh_screen.dart';
 import 'screens/debug/field_validation_screen.dart';
@@ -268,6 +269,11 @@ final _router = GoRouter(
       builder: (ctx, st) =>
           PreCallPreviewScreen(roomQuery: st.uri.query),
     ),
+    // Offline Comms Hub (§19) — one screen listing every no-internet bearer,
+    // oldest signalling principle to newest. Pure Flutter, no new deps.
+    GoRoute(
+        path: '/offline-hub',
+        builder: (_, __) => const OfflineHubScreen()),
     GoRoute(
         path: '/offline-lan',
         builder: (_, __) => const OfflineLanScreen()),

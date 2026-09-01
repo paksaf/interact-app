@@ -179,10 +179,12 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
             builder: (context, _) {
               if (_starting) return _statusView('Connecting…', spinner: true);
               if (_startError != null) {
-                return _statusView(_startError!, retry: true);
+                return _statusView(_startError!,
+                    retry: true, showLanWalkie: _isPtt);
               }
               if (_ctrl.error != null) {
-                return _statusView(_ctrl.error!, retry: true);
+                return _statusView(_ctrl.error!,
+                    retry: true, showLanWalkie: _isPtt);
               }
               if (_ctrl.dropped) {
                 final auto = _reconnectAttempts < _maxReconnects;
@@ -1008,7 +1010,8 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
   }
 
   // ── Status (connecting / error / empty) ────────────────────────────
-  Widget _statusView(String message, {bool spinner = false, bool retry = false}) {
+  Widget _statusView(String message,
+      {bool spinner = false, bool retry = false, bool showLanWalkie = false}) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -1033,6 +1036,19 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
             ),
             const SizedBox(height: 8),
             TextButton(onPressed: _leave, child: const Text('Leave')),
+          ],
+          // §22 — the online (LiveKit) walkie needs the cloud to mint a token,
+          // so with no internet it dies here. Offer the offline LAN walkie
+          // (docs/…§18) as a one-tap escape rather than making a field user
+          // back out and hunt for the other entry.
+          if (showLanWalkie) ...[
+            const SizedBox(height: 8),
+            TextButton.icon(
+              onPressed: () => context.push(
+                  '/lan-walkie?code=${Uri.encodeComponent(widget.code)}'),
+              icon: const Icon(Icons.wifi_tethering),
+              label: const Text('No internet? Use nearby Wi‑Fi'),
+            ),
           ],
         ],
       ),

@@ -42,36 +42,70 @@ const _kAuthTimeout = Duration(seconds: 25);
 /// POST helper that always terminates: applies [_kAuthTimeout] and maps
 /// connection failures to a clear, TV-friendly message instead of a hang.
 Future<http.Response> _postJson(String url, Map<String, dynamic> body) async {
-  try {
-    return await http
-        .post(
-          Uri.parse(url),
-          headers: const {'Content-Type': 'application/json'},
-          body: jsonEncode(body),
-        )
-        .timeout(_kAuthTimeout);
-  } on TimeoutException {
-    throw Exception(
-        'Couldn’t reach INTERACT (timed out). Check Wi‑Fi or Cellular, '
-        'then try again. Email login also works if SMS/WhatsApp is slow.');
-  } on SocketException catch (e) {
-    // DNS/connect failure — kick the base-URL failover probe (throttled)
-    // so the user's next retry can land on the fallback host.
-    unawaited(ApiBase.checkAndMaybeSwitch());
-    final detail = (e.osError?.message ?? e.message).trim();
-    throw Exception(
-        'No connection to INTERACT'
-        '${detail.isNotEmpty ? ' ($detail)' : ''}.\n\n'
-        '• Turn on Wi‑Fi or Cellular Data for Talk\n'
-        '• If Wi‑Fi has no internet, switch to mobile data\n'
-        '• Then try WhatsApp again, or use Email');
-  } on HandshakeException catch (e) {
-    throw Exception(
-        'Secure connection to INTERACT failed (${e.message}). '
-        'Check the date/time on this device, then try again.');
-  } on http.ClientException catch (e) {
-    throw Exception('Network error: ${e.message}. Check this device’s connection.');
+  // The auth host (www.interactpak.com) has NO multi-host failover like the
+  // chat path, and this environment's resolver (HS8145C5 / ISP) flaps with
+  // errno 7/8 "no address" that usually clears within a second or two. A
+  // single-shot request turned that flap into a hard block where BOTH SMS and
+  // WhatsApp login failed at once — and a DNS failure surfaces as a
+  // ClientException ("ClientException with SocketException: Failed host
+  // lookup"), which the old code threw IMMEDIATELY with no retry. Retry
+  // transient network failures a few times before surfacing the error so a
+  // flap self-heals. (A code that never arrives after a 200 is server-side
+  // delivery — capcom6 SMS gateway / Baileys WhatsApp — not fixable here.)
+  const maxAttempts = 3;
+  const backoff = Duration(milliseconds: 1200);
+  Object? lastErr;
+  for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await http
+          .post(
+            Uri.parse(url),
+            headers: const {'Content-Type': 'application/json'},
+            body: jsonEncode(body),
+          )
+          .timeout(_kAuthTimeout);
+    } on HandshakeException catch (e) {
+      // TLS / device-clock issues are not transient — fail fast with guidance.
+      throw Exception(
+          'Secure connection to INTERACT failed (${e.message}). '
+          'Check the date/time on this device, then try again.');
+    } catch (e) {
+      final transient = e is TimeoutException || ApiBase.isDnsOrOffline(e);
+      if (!transient) {
+        if (e is http.ClientException) {
+          throw Exception(
+              'Network error: ${e.message}. Check this device’s connection.');
+        }
+        rethrow;
+      }
+      lastErr = e;
+      // Nudge the chat-host failover probe too (helps the session calls that
+      // DO use ApiBase; harmless for the auth host). Then wait out the flap.
+      if (e is! TimeoutException) unawaited(ApiBase.checkAndMaybeSwitch());
+      if (attempt < maxAttempts) {
+        await Future<void>.delayed(backoff);
+        continue;
+      }
+    }
   }
+  // Retries exhausted — map to a clear, channel-aware message.
+  if (lastErr is TimeoutException) {
+    throw Exception(
+        'Couldn’t reach INTERACT (timed out) after several tries. Check Wi‑Fi '
+        'or Cellular, then try again. Email login also works if SMS/WhatsApp '
+        'is slow.');
+  }
+  final detail = lastErr is SocketException
+      ? ((lastErr as SocketException).osError?.message ??
+              (lastErr as SocketException).message)
+          .trim()
+      : (lastErr?.toString() ?? '');
+  throw Exception(
+      'No connection to INTERACT'
+      '${detail.isNotEmpty ? ' ($detail)' : ''}.\n\n'
+      '• Turn on Wi‑Fi or Cellular Data for Talk\n'
+      '• If Wi‑Fi has no internet, switch to mobile data\n'
+      '• Then try WhatsApp again, or use Email');
 }
 const _kTokenKey = 'interact.auth.token';
 const _kPhoneKey = 'interact.auth.phone';

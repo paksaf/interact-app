@@ -157,14 +157,16 @@ class LanService {
         final from = (m['from'] as String?) ?? '';
         if (from.isEmpty || from == _peerId) return;
         final body = (m['body'] as String?) ?? '';
+        // Render locally, sender-attributed, with any talk: envelope
+        // stripped. We do NOT re-inject to cloud as the local user — that
+        // was a confused-deputy injection hole (see mesh_cloud_bridge.dart
+        // header + docs/OFFLINE_BEARERS_AUDIT_2026-09-01.md §3).
         _messagesController.add(LanTextMessage(
           fromPeerId: from,
           fromName: (m['name'] as String?) ?? from,
-          body: body,
+          body: MeshCloudBridge.plainBody(body) ?? body,
           at: DateTime.tryParse(m['at'] as String? ?? '') ?? DateTime.now(),
         ));
-        // Bridge talk:-prefixed LAN frames into cloud when online.
-        unawaited(MeshCloudBridge.instance.ingestLanBody(body));
       } catch (_) {/* ignore malformed */}
     });
   }
