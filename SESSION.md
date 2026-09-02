@@ -384,3 +384,22 @@ the PK phone (17 ok / 8 failed = carrier A2P throttling signature). Fix is
 physical: SMS bundle/balance, reboot radio, capcom6 battery-optimization
 exempt + SEND_SMS granted. Real fix for scale = proper A2P route per country
 (the console's fallback purpose).
+
+---
+
+## 2026-09-02 (cont.) — E2E SessionBuilder, Friends map, IoT auto-reconnect, iOS/DNS/permission fixes
+
+**Commits on `feat/talk-offline-mesh-camera`:**
+- `a2f81fa` — Gateway Console embedded in app (WebView, Menu tile).
+- `8ba74b9` — Friends map + offline tiles; iOS location Info.plist keys; DNS failover fix (iPhone Recent-calls "no wifi"); sequential permission prompts.
+- `5b54070` — Launch-time IoT RF-HTTP auto-reconnect; Friends map in Offline Hub; map empty-state hint.
+- `8cdd56c` — E2E SessionBuilder + SessionCipher over a persistent Signal store.
+
+**E2E SessionBuilder (8cdd56c) — encryption path EXISTS, gated OFF (INTERACT_E2E=false).**
+- e2e_signal_store.dart: all four libsignal stores on secure storage; ratchet survives restarts.
+- e2e_session_service.dart: ensureSession + encrypt/decrypt; payload <type>:<base64> inside e2e:v1:.
+- e2e_crypto_service.dart: real encrypt/decrypt, status->active after key sync, fail-closed.
+- message_repository.dart: inbound e2e:v1: decrypted before store/display.
+- analyze clean. Two-device E2E-1 test IN PROGRESS: Samsung(A)+iPhone(B) both on the E2E build.
+- Gotcha: SignedPreKeyRecord uses fromSerialized, PreKeyRecord uses fromBuffer.
+- After test: reinstall A+B WITHOUT the define to return to shipping builds.

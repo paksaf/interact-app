@@ -1,3 +1,5 @@
+> STATUS 2026-09-02: IMPLEMENTED + committed by Claude in 8cdd56c (feat/talk-offline-mesh-camera), analyze-clean. Do NOT rebuild. REMAINING (not code): two-device E2E-1 test — both phones have the INTERACT_E2E=true build; run the acceptance test at the bottom, then flip the flag only if it passes.
+
 > STATUS 2026-09-02: IMPLEMENTED by Claude (Cowork) — do NOT rebuild.
 > Files: `e2e_signal_store.dart` (persistent store), `e2e_session_service.dart`
 > (SessionBuilder+SessionCipher), rewired `e2e_crypto_service.dart`, and inbound
