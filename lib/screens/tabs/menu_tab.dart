@@ -34,6 +34,8 @@ class MenuTab extends StatelessWidget {
           () => context.push('/login-codes')),
       _Item(Icons.qr_code_2_rounded, 'Login QR',
           () => context.push('/login-qr')),
+      _Item(Icons.hub_rounded, 'Gateway Console',
+          () => context.push('/gateway-console')),
     ];
     return Scaffold(
       backgroundColor: Colors.transparent,

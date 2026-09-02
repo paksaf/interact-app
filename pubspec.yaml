@@ -70,6 +70,14 @@ dependencies:
   # ── External URLs (Forgejo / license / open-source links) ──────────
   url_launcher: ^6.2.5
 
+  # ── In-app Gateway Console embed (2026-09-02) ───────────────────────
+  # Managers re-link a country's WhatsApp line (QR / pairing code) or check
+  # SMS health from the phone via gateway_console_screen.dart. onHttpAuthRequest
+  # (webview_flutter ≥4.7) forwards the Caddy Basic-auth challenge to a native
+  # dialog. Caret down-solves to the newest release this Flutter SDK (3.27)
+  # allows, so no manual pin needed.
+  webview_flutter: ^4.7.0
+
   # ── Share sheet (invite recipients via any app) ────────────────────
   # Uses Android's ACTION_SEND chooser — bypasses the "Always use" trap
   # that url_launcher(sms:) hits when an app like WhatsApp is set as

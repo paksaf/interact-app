@@ -24,6 +24,7 @@ import 'screens/auth/profile_setup_screen.dart';
 import 'screens/auth/approve_login_screen.dart';
 import 'screens/auth/login_codes_inbox_screen.dart';
 import 'screens/auth/generate_login_qr_screen.dart';
+import 'screens/admin/gateway_console_screen.dart';
 import 'screens/camera/camera_effects_screen.dart';
 import 'screens/contacts/device_contacts_screen.dart';
 import 'screens/me/backup_screen.dart';
@@ -363,6 +364,10 @@ final _router = GoRouter(
     GoRoute(
       path: '/login-qr',
       builder: (_, __) => const GenerateLoginQrScreen(),
+    ),
+    GoRoute(
+      path: '/gateway-console',
+      builder: (_, __) => const GatewayConsoleScreen(),
     ),
     GoRoute(
       path: '/incoming',
