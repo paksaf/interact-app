@@ -171,6 +171,15 @@ class MessageRepository {
     final senderId = frame.senderId;
     final isUnresolvedMeshPubKey = looksLikeMeshPubKeyHex(senderId);
 
+    // Decrypt E2E ciphertext from this sender before storing/displaying.
+    var plainBody = frame.body;
+    if (E2eCryptoService.instance.isCiphertext(frame.body) &&
+        senderId.isNotEmpty &&
+        !isUnresolvedMeshPubKey) {
+      plainBody = await E2eCryptoService.instance
+          .decryptInbound(frame.body, peerUserId: senderId);
+    }
+
     if (!isUnresolvedMeshPubKey &&
         frame.threadId.isNotEmpty &&
         senderId.isNotEmpty) {
@@ -186,7 +195,7 @@ class MessageRepository {
       senderId: frame.senderId,
       senderName: frame.senderName.isNotEmpty ? frame.senderName : 'Peer',
       kind: MessageKind.text,
-      body: frame.body,
+      body: plainBody,
       sentAt: frame.sentAt,
       isMine: false,
       bearer: frame.bearer.wire,
@@ -197,7 +206,7 @@ class MessageRepository {
     await _persist(frame.threadId, [...local, msg]);
 
     unawaited(LocationTraceService.instance.recordFromMessageBody(
-      body: frame.body,
+      body: plainBody,
       senderId: frame.senderId,
       senderName: msg.senderName,
       threadId: frame.threadId,

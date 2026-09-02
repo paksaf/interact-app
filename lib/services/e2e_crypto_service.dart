@@ -7,6 +7,7 @@ import 'e2e/e2e_envelope.dart';
 import 'e2e/e2e_identity_manager.dart';
 import 'e2e/e2e_prekey_api.dart';
 import 'e2e/e2e_prekey_upload.dart';
+import 'e2e/e2e_session_service.dart';
 
 enum E2eStatus {
   /// libsignal not integrated — server sees message bodies on cloud path.
@@ -55,36 +56,43 @@ class E2eCryptoService {
     if (await E2eIdentityManager.instance.isInstalled) {
       _status = E2eStatus.identityReady;
       await _syncPreKeys();
+      _status = E2eStatus.active; // E2E-capable; per-peer sessions build lazily
       return;
     }
     await E2eIdentityManager.instance.install();
     _status = E2eStatus.identityReady;
     await _syncPreKeys();
+    _status = E2eStatus.active;
   }
 
   Future<void> _syncPreKeys() async {
     await E2ePreKeyUpload(E2ePreKeyApi(AuthService.instance)).syncIfNeeded();
   }
 
-  Future<String> decryptInbound(String body) async {
-    if (!isE2eEnvelope(body)) return body;
-    // Session decrypt is not implemented yet (Phase 1.5). NEVER show the raw
-    // ciphertext envelope to the user — surface a placeholder until the
-    // Signal cipher lands.
-    return '🔒 Encrypted message — update the app to read it.';
+  Future<String> decryptInbound(String body,
+      {required String peerUserId}) async {
+    final payload = unwrapE2eCiphertext(body);
+    if (payload == null) return body; // not an E2E envelope — plaintext
+    try {
+      final plain = await E2eSessionService.instance.decrypt(peerUserId, payload);
+      if (plain != null) return plain;
+    } catch (_) {/* fall through to placeholder */}
+    // NEVER show the raw ciphertext envelope to the user.
+    return '🔒 Encrypted message — could not be decrypted on this device.';
   }
 
   Future<String> encryptOutbound(String plaintext,
       {required String peerUserId}) async {
     if (!shouldEncryptOutbound) return plaintext;
-    // FAIL CLOSED. shouldEncryptOutbound is true but the Signal cipher is not
-    // implemented yet (Phase 1.5). Returning plaintext here would silently
-    // send an "encrypted" message in the clear — the classic downgrade
-    // breach. Refuse to send rather than lie about encryption. (Unreachable
-    // today: the compile gate + status==active guard keep this false; this
-    // guards whoever wires session-active before the cipher exists.)
-    throw StateError(
-        'E2E is enabled but the Signal cipher is not implemented (Phase 1.5). '
-        'Refusing to send plaintext under an encrypted flag.');
+    final payload =
+        await E2eSessionService.instance.encrypt(peerUserId, plaintext);
+    if (payload == null) {
+      // No session could be built (peer has no pre-keys / not E2E-ready).
+      // FAIL CLOSED — never send plaintext under an encrypted flag.
+      throw StateError(
+          'E2E is on but no session with the peer (not encrypted-ready). '
+          'Refusing to send plaintext.');
+    }
+    return wrapE2eCiphertext(payload);
   }
 }
