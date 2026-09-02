@@ -98,18 +98,23 @@ class ApiBase {
       return await op();
     } catch (e) {
       if (!isDnsOrOffline(e)) rethrow;
+      // Probe + switch to a reachable host, then RETRY on the (possibly
+      // switched) current host FIRST. Bug fixed 2026-09-02: previously we
+      // seeded `tried` with `_current` *after* the probe had already adopted
+      // the good host — so the working host was skipped, the dead apex was
+      // retried, and the original DNS error was rethrown (iPhone "no wifi"
+      // even though talk.interactpak.com was up).
       await checkAndMaybeSwitch(force: true);
-      // If probe kept the same dead host (both down, or race), try each
-      // alternate explicitly so a flaky apex doesn't block talk.* forever.
-      final tried = <String>{_current};
-      for (final c in candidates) {
+      final order = <String>[_current, ...candidates.where((c) => c != _current)];
+      final tried = <String>{};
+      for (final c in order) {
         if (tried.contains(c)) continue;
+        tried.add(c);
         await _adopt(c);
         try {
           return await op();
         } catch (e2) {
           if (!isDnsOrOffline(e2)) rethrow;
-          tried.add(c);
         }
       }
       rethrow;

@@ -226,7 +226,10 @@ class _FieldValidationScreenState extends ConsumerState<FieldValidationScreen> {
                 ),
                 if (c.route != null)
                   TextButton(
-                    onPressed: () => context.push(c.route!),
+                    onPressed: () {
+                      FieldProbeService.instance.setActiveCaseId(c.id);
+                      context.push(c.route!);
+                    },
                     child: const Text('Open'),
                   ),
               ],
@@ -276,7 +279,7 @@ class _FieldValidationScreenState extends ConsumerState<FieldValidationScreen> {
                 Text(
                   'Pakistan RF matrix — P3 waves. Open the transport screen, '
                   'measure wall-clock, mark PASS/FAIL. Probe log captures TX/RX '
-                  'latency from live bearers.',
+                  'latency from live bearers. Runbook: docs/FIELD_TEST_WAVE1_WAVE2_2026-09-02.md',
                   style: TextStyle(color: cs.outline),
                 ),
                 const SizedBox(height: 12),

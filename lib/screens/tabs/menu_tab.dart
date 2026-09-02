@@ -36,6 +36,8 @@ class MenuTab extends StatelessWidget {
           () => context.push('/login-qr')),
       _Item(Icons.hub_rounded, 'Gateway Console',
           () => context.push('/gateway-console')),
+      _Item(Icons.map_rounded, 'Friends map',
+          () => context.push('/friends-map')),
     ];
     return Scaffold(
       backgroundColor: Colors.transparent,

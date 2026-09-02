@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../utils/permission_flow.dart';
 
 final nearbyBleDevicesServiceProvider =
     Provider<NearbyBleDevicesService>((ref) => NearbyBleDevicesService());
@@ -99,11 +100,11 @@ class NearbyBleDevicesService {
 
   Future<void> _ensurePermissions() async {
     if (Platform.isAndroid) {
-      final statuses = await [
+      final statuses = await requestSequentially([
         Permission.bluetoothScan,
         Permission.bluetoothConnect,
         Permission.locationWhenInUse,
-      ].request();
+      ]);
       final scanOk = statuses[Permission.bluetoothScan]?.isGranted ?? false;
       final locOk =
           statuses[Permission.locationWhenInUse]?.isGranted ?? false;

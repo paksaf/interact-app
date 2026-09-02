@@ -128,9 +128,17 @@ class _LocationTraceScreenState extends ConsumerState<LocationTraceScreen> {
             children: [
               Expanded(
                 child: FilledButton.icon(
+                  onPressed: () => context.push('/friends-map'),
+                  icon: const Icon(Icons.map_rounded),
+                  label: const Text('Open map'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
                   onPressed: () => context.push('/chats'),
                   icon: const Icon(Icons.chat_outlined),
-                  label: const Text('Share from chat'),
+                  label: const Text('Share'),
                 ),
               ),
               const SizedBox(width: 8),

@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../../utils/permission_flow.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../core/offline/mesh_identity_card.dart';
@@ -38,12 +39,12 @@ class _NearbyMeshScreenState extends ConsumerState<NearbyMeshScreen> {
 
   Future<void> _boot() async {
     try {
-      await [
+      await requestSequentially([
         Permission.bluetoothScan,
         Permission.bluetoothConnect,
         Permission.bluetoothAdvertise,
         Permission.locationWhenInUse,
-      ].request();
+      ]);
       await WakelockPlus.enable();
       await MeshForegroundService.instance.start();
 

@@ -2,8 +2,11 @@
 //
 // Signal-protocol E2E — Phase 1.5 (libsignal_protocol_dart integrated, gated).
 
+import 'auth_service.dart';
 import 'e2e/e2e_envelope.dart';
 import 'e2e/e2e_identity_manager.dart';
+import 'e2e/e2e_prekey_api.dart';
+import 'e2e/e2e_prekey_upload.dart';
 
 enum E2eStatus {
   /// libsignal not integrated — server sees message bodies on cloud path.
@@ -51,10 +54,16 @@ class E2eCryptoService {
     }
     if (await E2eIdentityManager.instance.isInstalled) {
       _status = E2eStatus.identityReady;
+      await _syncPreKeys();
       return;
     }
     await E2eIdentityManager.instance.install();
     _status = E2eStatus.identityReady;
+    await _syncPreKeys();
+  }
+
+  Future<void> _syncPreKeys() async {
+    await E2ePreKeyUpload(E2ePreKeyApi(AuthService.instance)).syncIfNeeded();
   }
 
   Future<String> decryptInbound(String body) async {

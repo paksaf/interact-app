@@ -25,6 +25,8 @@ import 'screens/auth/approve_login_screen.dart';
 import 'screens/auth/login_codes_inbox_screen.dart';
 import 'screens/auth/generate_login_qr_screen.dart';
 import 'screens/admin/gateway_console_screen.dart';
+import 'screens/location/friends_map_screen.dart';
+import 'services/offline_maps_service.dart';
 import 'screens/camera/camera_effects_screen.dart';
 import 'screens/contacts/device_contacts_screen.dart';
 import 'screens/me/backup_screen.dart';
@@ -80,6 +82,7 @@ Future<void> main() async {
   // DNS-failover base resolver: restore last-known-good API host and
   // verify it in the background (see services/api_base.dart).
   await ApiBase.init();
+  await OfflineMapsService.instance.init();
   // FCM for background/killed call ring. Fail-soft: if google-services.json /
   // Firebase isn't configured yet, the app still runs (ring stays foreground-only).
   // Lifestyle donor: register the background handler BEFORE runApp.
@@ -335,6 +338,9 @@ final _router = GoRouter(
     GoRoute(
         path: '/location-trace',
         builder: (_, __) => const LocationTraceScreen()),
+    GoRoute(
+        path: '/friends-map',
+        builder: (_, __) => const FriendsMapScreen()),
     GoRoute(
         path: '/field-validation',
         builder: (_, __) => const FieldValidationScreen()),

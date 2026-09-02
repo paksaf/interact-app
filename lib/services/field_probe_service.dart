@@ -59,6 +59,14 @@ class FieldProbeService {
 
   DateTime? _lastTxAt;
   String? _lastTxBearer;
+  String? _activeCaseId;
+
+  /// Set from Me → Field validation when opening a case screen.
+  String? get activeCaseId => _activeCaseId;
+
+  void setActiveCaseId(String? caseId) {
+    _activeCaseId = caseId;
+  }
 
   Future<void> recordTx({
     required String bearer,
@@ -69,7 +77,7 @@ class FieldProbeService {
     _lastTxBearer = bearer;
     await _append(FieldProbeEvent(
       id: 'tx-${DateTime.now().microsecondsSinceEpoch}',
-      caseId: caseId,
+      caseId: caseId ?? _activeCaseId,
       bearer: bearer,
       direction: 'tx',
       at: _lastTxAt!,
@@ -88,7 +96,7 @@ class FieldProbeService {
     }
     await _append(FieldProbeEvent(
       id: 'rx-${DateTime.now().microsecondsSinceEpoch}',
-      caseId: caseId,
+      caseId: caseId ?? _activeCaseId,
       bearer: bearer,
       direction: 'rx',
       at: DateTime.now(),

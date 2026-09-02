@@ -13,6 +13,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../utils/permission_flow.dart';
 import 'package:record/record.dart';
 
 class BleWalkieUuids {
@@ -84,13 +85,13 @@ class BleWalkieService {
 
   Future<void> startScan() async {
     if (!supportsPlatform) return;
-    await [
+    await requestSequentially([
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
       Permission.bluetoothAdvertise,
       Permission.microphone,
       Permission.locationWhenInUse,
-    ].request();
+    ]);
 
     _peers.clear();
     _peersCtrl.add(const []);

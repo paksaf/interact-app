@@ -8,6 +8,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../utils/permission_flow.dart';
 import 'package:sahl_mesh/sahl_mesh.dart';
 import 'package:sahl_mesh/sahl_mesh_ble.dart';
 
@@ -37,12 +38,12 @@ class BleMeshTransportService {
 
   Future<void> start() async {
     if (_running) return;
-    await [
+    await requestSequentially([
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
       Permission.bluetoothAdvertise,
       Permission.locationWhenInUse,
-    ].request();
+    ]);
     await MeshForegroundService.instance.start();
 
     final id = await MeshIdentityStore.instance.loadOrCreate();

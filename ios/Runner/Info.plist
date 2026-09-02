@@ -118,6 +118,10 @@
 			<key>NSAllowsLocalNetworking</key>
 			<true/>
 		</dict>
+		<key>NSLocationWhenInUseUsageDescription</key>
+		<string>INTERACT Talk shares your live location with friends you choose, and shows them on the map — including offline over Wi‑Fi/Bluetooth when there is no signal.</string>
+		<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+		<string>INTERACT Talk keeps sharing your live location with friends you choose while a trip is active, so they can find you even when the app is in the background or there is no cellular signal.</string>
 		<key>NSLocalNetworkUsageDescription</key>
 		<string>INTERACT Talk finds nearby phones on the same Wi‑Fi or via peer-to-peer for offline chat without internet.</string>
 		<key>UIRequiresPersistentWiFi</key>

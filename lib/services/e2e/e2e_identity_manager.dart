@@ -8,6 +8,8 @@ import 'dart:typed_data';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
 
+import 'e2e_prekey_store.dart';
+
 class E2eIdentityRecord {
   const E2eIdentityRecord({
     required this.registrationId,
@@ -75,13 +77,13 @@ class E2eIdentityManager {
     final registrationId = generateRegistrationId(false);
     const deviceId = 1;
 
-    // ⚠️ SCAFFOLD GAP (Phase 1.5): these generate valid pre-keys but their
-    // return values are DISCARDED — there is no PreKeyStore persistence yet.
-    // Before wiring E2E on, persist these (and load them for
-    // PreKeyBundle upload + inbound PreKeySignalMessage decrypt), or sessions
-    // cannot be built. Left as-is deliberately for the off-by-default scaffold.
-    generatePreKeys(0, preKeyCount);
-    generateSignedPreKey(identityKeyPair, 0);
+    // Persist pre-keys locally, then upload public material (fail-soft).
+    final preKeys = generatePreKeys(0, preKeyCount);
+    final signedPreKey = generateSignedPreKey(identityKeyPair, 0);
+    await E2ePreKeyStore.instance.save(
+      preKeys: preKeys,
+      signedPreKey: signedPreKey,
+    );
 
     await _storage.write(
       key: _identityPairKey,

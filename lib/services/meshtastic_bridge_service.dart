@@ -7,6 +7,7 @@ import 'dart:async';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../utils/permission_flow.dart';
 
 import '../core/meshtastic/meshtastic_packet_codec.dart';
 
@@ -61,11 +62,11 @@ class MeshtasticBridgeService {
   }
 
   Future<void> startScan({Duration timeout = const Duration(seconds: 8)}) async {
-    await [
+    await requestSequentially([
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
       Permission.locationWhenInUse,
-    ].request();
+    ]);
     _candidates.clear();
     _controller.add(const []);
     await _scanSub?.cancel();
