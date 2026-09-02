@@ -11,13 +11,16 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../models/family_circle.dart';
 import '../../models/social_post.dart';
+import '../../services/auth_service.dart';
+import '../../services/chat_api.dart';
 import '../../services/family_circle_store.dart';
 import '../../services/location_trace_service.dart';
-import '../../services/presence_service.dart';
 import '../../services/social_feed_service.dart';
 import '../../services/talk_api.dart';
-import '../../utils/chat_formatters.dart';
 import '../../widgets/branded_app_bar.dart';
+import '../../widgets/social/social_feed_card.dart';
+import '../../widgets/social/social_reels_viewer.dart';
+import '../../widgets/social/social_stories_row.dart';
 import '../../widgets/user_avatar.dart';
 
 class SocialPanelScreen extends ConsumerStatefulWidget {
@@ -33,7 +36,13 @@ class _SocialPanelScreenState extends ConsumerState<SocialPanelScreen>
   SocialAudience? _filter;
   List<SocialPost> _feed = const [];
   List<FamilyCircleMember> _circle = const [];
+  Map<String, List<SocialPost>> _storiesByAuthor = const {};
+  String _myAuthorId = 'local';
+  String _myName = 'Me';
+  String? _myAvatarUrl;
   bool _busy = true;
+
+  final _picker = ImagePicker();
 
   @override
   void initState() {
@@ -53,19 +62,52 @@ class _SocialPanelScreenState extends ConsumerState<SocialPanelScreen>
 
   Future<void> _reload() async {
     setState(() => _busy = true);
-    final feed = await ref.read(socialFeedServiceProvider).buildFeed(filter: _filter);
+    final svc = ref.read(socialFeedServiceProvider);
+    final feed = await svc.buildFeed(filter: _filter);
     final circle = await ref.read(familyCircleStoreProvider).listMembers();
+    final stories = await svc.recentStoriesByAuthor();
+    final myId = await ref.read(authServiceProvider).localUserId() ?? 'local';
+    final myName = await ref.read(authServiceProvider).displayName() ?? 'Me';
+    final myAvatar = await ref.read(chatApiProvider).getAvatar();
     if (!mounted) return;
     setState(() {
       _feed = feed;
       _circle = circle;
+      _storiesByAuthor = stories;
+      _myAuthorId = myId;
+      _myName = myName;
+      _myAvatarUrl = myAvatar;
       _busy = false;
     });
   }
 
-  Future<void> _compose() async {
-    final ctrl = TextEditingController();
+  List<SocialPost> get _mediaPosts =>
+      _feed.where((p) => p.hasLocalMedia).toList();
+
+  Future<void> _openCompose({bool pickMediaFirst = false}) async {
+    final caption = TextEditingController();
     SocialAudience audience = SocialAudience.family;
+    XFile? picked;
+    SocialPostKind? mediaKind;
+
+    Future<void> pick({
+      required ImageSource source,
+      required bool video,
+    }) async {
+      final file = video
+          ? await _picker.pickVideo(source: source, maxDuration: const Duration(seconds: 60))
+          : await _picker.pickImage(source: source, imageQuality: 85);
+      if (file != null) {
+        picked = file;
+        mediaKind = video ? SocialPostKind.video : SocialPostKind.photo;
+      }
+    }
+
+    if (pickMediaFirst) {
+      await pick(source: ImageSource.gallery, video: false);
+      if (!mounted) return;
+    }
+
     final posted = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -79,82 +121,145 @@ class _SocialPanelScreenState extends ConsumerState<SocialPanelScreen>
             bottom: MediaQuery.viewInsetsOf(ctx).bottom + 16,
           ),
           child: StatefulBuilder(
-            builder: (ctx, setLocal) => Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text('Share an update',
-                    style: Theme.of(ctx).textTheme.titleMedium),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: ctrl,
-                  autofocus: true,
-                  maxLines: 4,
-                  decoration: const InputDecoration(
-                    hintText: 'What\'s happening with family?',
-                    border: OutlineInputBorder(),
-                  ),
+            builder: (ctx, setLocal) {
+              final canPost = caption.text.trim().isNotEmpty || picked != null;
+              return SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      picked == null ? 'Share an update' : 'Share media',
+                      style: Theme.of(ctx).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 12),
+                    if (picked != null) ...[
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: AspectRatio(
+                          aspectRatio: mediaKind == SocialPostKind.video ? 9 / 16 : 4 / 5,
+                          child: mediaKind == SocialPostKind.video
+                              ? Container(
+                                  color: const Color(0xFF1E1B4B),
+                                  child: const Center(
+                                    child: Icon(Icons.videocam, color: Colors.white54, size: 48),
+                                  ),
+                                )
+                              : Image.file(
+                                  File(picked!.path),
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => ColoredBox(
+                                    color: Theme.of(ctx).colorScheme.surfaceContainerHighest,
+                                    child: const Center(child: Icon(Icons.image_outlined)),
+                                  ),
+                                ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    TextField(
+                      controller: caption,
+                      autofocus: picked == null,
+                      maxLines: 4,
+                      onChanged: (_) => setLocal(() {}),
+                      decoration: InputDecoration(
+                        hintText: picked == null
+                            ? 'What\'s happening with family?'
+                            : 'Add a caption (optional)',
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text('Attach', style: Theme.of(ctx).textTheme.labelLarge),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        _MediaChip(
+                          icon: Icons.photo_library_outlined,
+                          label: 'Gallery',
+                          onTap: () async {
+                            await pick(source: ImageSource.gallery, video: false);
+                            setLocal(() {});
+                          },
+                        ),
+                        _MediaChip(
+                          icon: Icons.video_library_outlined,
+                          label: 'Video',
+                          onTap: () async {
+                            await pick(source: ImageSource.gallery, video: true);
+                            setLocal(() {});
+                          },
+                        ),
+                        _MediaChip(
+                          icon: Icons.photo_camera_outlined,
+                          label: 'Camera',
+                          onTap: () async {
+                            await pick(source: ImageSource.camera, video: false);
+                            setLocal(() {});
+                          },
+                        ),
+                        _MediaChip(
+                          icon: Icons.videocam_outlined,
+                          label: 'Record',
+                          onTap: () async {
+                            await pick(source: ImageSource.camera, video: true);
+                            setLocal(() {});
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Text('Who can see this', style: Theme.of(ctx).textTheme.labelLarge),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      children: SocialAudience.values.map((a) {
+                        return ChoiceChip(
+                          label: Text(a.label),
+                          selected: audience == a,
+                          onSelected: (_) => setLocal(() => audience = a),
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 16),
+                    FilledButton(
+                      onPressed: canPost ? () => Navigator.pop(ctx, true) : null,
+                      child: const Text('Post'),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 12),
-                Text('Who can see this', style: Theme.of(ctx).textTheme.labelLarge),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  children: SocialAudience.values.map((a) {
-                    return ChoiceChip(
-                      label: Text(a.label),
-                      selected: audience == a,
-                      onSelected: (_) => setLocal(() => audience = a),
-                    );
-                  }).toList(),
-                ),
-                const SizedBox(height: 12),
-                FilledButton(
-                  onPressed: () => Navigator.pop(ctx, true),
-                  child: const Text('Post'),
-                ),
-              ],
-            ),
+              );
+            },
           ),
         );
       },
     );
-    if (posted != true || !mounted) return;
-    final body = ctrl.text.trim();
-    if (body.isEmpty) return;
-    await ref.read(socialFeedServiceProvider).publishStatus(
-          body: body,
-          audience: audience,
-        );
-    await _reload();
-  }
 
-  Future<void> _composePhoto() async {
-    final picker = ImagePicker();
-    final file = await picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
-    if (file == null || !mounted) return;
-    final caption = await showDialog<String>(
-      context: context,
-      builder: (ctx) {
-        final c = TextEditingController();
-        return AlertDialog(
-          title: const Text('Photo caption'),
-          content: TextField(controller: c, autofocus: true, maxLines: 3),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, c.text.trim()),
-              child: const Text('Post'),
-            ),
-          ],
-        );
-      },
-    );
-    await ref.read(socialFeedServiceProvider).publishStatus(
-          body: caption ?? '',
-          audience: SocialAudience.family,
-          mediaPath: file.path,
-        );
+    if (posted != true || !mounted) {
+      caption.dispose();
+      return;
+    }
+
+    final body = caption.text.trim();
+    caption.dispose();
+
+    if (picked != null && mediaKind != null) {
+      await ref.read(socialFeedServiceProvider).publishMedia(
+            localPath: picked!.path,
+            kind: mediaKind!,
+            body: body,
+            audience: audience,
+          );
+    } else if (body.isNotEmpty) {
+      await ref.read(socialFeedServiceProvider).publishStatus(
+            body: body,
+            audience: audience,
+          );
+    } else {
+      return;
+    }
     await _reload();
   }
 
@@ -217,6 +322,10 @@ class _SocialPanelScreenState extends ConsumerState<SocialPanelScreen>
     await _reload();
   }
 
+  void _openStories(String authorId, List<SocialPost> posts) {
+    SocialReelsViewer.open(context, posts: posts);
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -244,22 +353,11 @@ class _SocialPanelScreenState extends ConsumerState<SocialPanelScreen>
         ),
       ),
       floatingActionButton: _tabs.index == 0
-          ? Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                FloatingActionButton.small(
-                  heroTag: 'photo',
-                  onPressed: _composePhoto,
-                  child: const Icon(Icons.photo_outlined),
-                ),
-                const SizedBox(height: 8),
-                FloatingActionButton.extended(
-                  heroTag: 'status',
-                  onPressed: _compose,
-                  icon: const Icon(Icons.edit_outlined),
-                  label: const Text('Update'),
-                ),
-              ],
+          ? FloatingActionButton.extended(
+              heroTag: 'share',
+              onPressed: () => _openCompose(),
+              icon: const Icon(Icons.add),
+              label: const Text('Share'),
             )
           : null,
       body: TabBarView(
@@ -307,68 +405,38 @@ class _SocialPanelScreenState extends ConsumerState<SocialPanelScreen>
               ),
             ),
           ),
-          if (_circle.isNotEmpty)
-            SliverToBoxAdapter(
-              child: SizedBox(
-                height: 96,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.all(12),
-                  itemCount: _circle.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 12),
-                  itemBuilder: (_, i) {
-                    final m = _circle[i];
-                    final online = m.phone != null &&
-                        ref.watch(presenceServiceProvider).status(m.phone!) !=
-                            PresenceStatus.offline;
-                    return Column(
-                      children: [
-                        Stack(
-                          children: [
-                            UserAvatar(name: m.displayName, radius: 28),
-                            if (online)
-                              Positioned(
-                                right: 0,
-                                bottom: 0,
-                                child: Container(
-                                  width: 12,
-                                  height: 12,
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF22C55E),
-                                    shape: BoxShape.circle,
-                                    border: Border.all(color: cs.surface, width: 2),
-                                  ),
-                                ),
-                              ),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        SizedBox(
-                          width: 64,
-                          child: Text(
-                            m.displayName.split(' ').first,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(fontSize: 11),
-                          ),
-                        ),
-                      ],
-                    );
-                  },
-                ),
-              ),
+          SliverToBoxAdapter(
+            child: SocialStoriesRow(
+              storiesByAuthor: _storiesByAuthor,
+              myAuthorId: _myAuthorId,
+              myName: _myName,
+              myAvatarUrl: _myAvatarUrl,
+              onAddStory: () => _openCompose(pickMediaFirst: true),
+              onOpenStories: _openStories,
             ),
+          ),
           if (_feed.isEmpty)
             const SliverFillRemaining(
               hasScrollBody: false,
-              child: Center(child: Text('No updates yet — post something for family')),
+              child: Center(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text(
+                    'No updates yet — tap Share to post text, photos, or video for family',
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
             )
           else
-            SliverList.separated(
-              itemCount: _feed.length,
-              separatorBuilder: (_, __) => const Divider(height: 1),
-              itemBuilder: (_, i) => _FeedTile(post: _feed[i], cs: cs),
+            SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, i) => SocialFeedCard(
+                  post: _feed[i],
+                  allMediaPosts: _mediaPosts,
+                ),
+                childCount: _feed.length,
+              ),
             ),
         ],
       ),
@@ -421,7 +489,7 @@ class _SocialPanelScreenState extends ConsumerState<SocialPanelScreen>
             Padding(
               padding: const EdgeInsets.only(top: 32),
               child: Text(
-                'Add family and close friends to see them in your feed row '
+                'Add family and close friends to see them in your status row '
                 'and filter updates.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: cs.outline),
@@ -472,67 +540,23 @@ class _SocialPanelScreenState extends ConsumerState<SocialPanelScreen>
   }
 }
 
-class _FeedTile extends StatelessWidget {
-  const _FeedTile({required this.post, required this.cs});
-  final SocialPost post;
-  final ColorScheme cs;
+class _MediaChip extends StatelessWidget {
+  const _MediaChip({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final kindLabel = switch (post.kind) {
-      SocialPostKind.announcement => 'Announcement',
-      SocialPostKind.photo => 'Photo',
-      SocialPostKind.location => 'Location',
-      SocialPostKind.status => 'Update',
-    };
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      leading: UserAvatar(
-        url: post.authorAvatarUrl,
-        name: post.authorName,
-        radius: 22,
-      ),
-      title: Row(
-        children: [
-          Expanded(
-            child: Text(
-              post.authorName,
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-          ),
-          Text(relTime(post.createdAt), style: TextStyle(fontSize: 11, color: cs.outline)),
-        ],
-      ),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('$kindLabel · ${post.audience.label}',
-              style: TextStyle(fontSize: 11, color: cs.outline)),
-          if (post.body.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(post.body),
-          ],
-          if (post.mediaPath != null && post.mediaPath!.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Image.file(
-                  File(post.mediaPath!),
-                  height: 160,
-                  width: double.infinity,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                ),
-              ),
-            ),
-          if (post.sourceThreadId != null)
-            TextButton(
-              onPressed: () => context.push('/chat/${post.sourceThreadId}'),
-              child: Text('Open ${post.sourceThreadTitle ?? 'channel'}'),
-            ),
-        ],
-      ),
+    return ActionChip(
+      avatar: Icon(icon, size: 18),
+      label: Text(label),
+      onPressed: onTap,
     );
   }
 }

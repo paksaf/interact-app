@@ -19,4 +19,20 @@ void main() {
     expect(restored.audience, SocialAudience.family);
     expect(restored.body, 'Eid Mubarak!');
   });
+
+  test('video kind and recent story window', () {
+    final video = SocialPost(
+      id: 'v1',
+      authorId: 'u1',
+      authorName: 'Sara',
+      audience: SocialAudience.family,
+      kind: SocialPostKind.video,
+      body: 'Clip',
+      mediaPath: '/tmp/clip.mp4',
+      createdAt: DateTime.now().subtract(const Duration(hours: 2)),
+    );
+    expect(video.isVideo, isTrue);
+    expect(video.isRecentStory, isTrue);
+    expect(SocialPostKind.fromWire('video'), SocialPostKind.video);
+  });
 }

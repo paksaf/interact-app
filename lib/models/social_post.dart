@@ -32,6 +32,7 @@ enum SocialAudience {
 enum SocialPostKind {
   status('status'),
   photo('photo'),
+  video('video'),
   announcement('announcement'),
   location('location');
 
@@ -42,6 +43,8 @@ enum SocialPostKind {
     switch (raw) {
       case 'photo':
         return SocialPostKind.photo;
+      case 'video':
+        return SocialPostKind.video;
       case 'announcement':
         return SocialPostKind.announcement;
       case 'location':
@@ -116,4 +119,18 @@ class SocialPost {
         sourceThreadTitle: j['sourceThreadTitle'] as String?,
         pendingSync: j['pendingSync'] as bool? ?? false,
       );
+}
+
+extension SocialPostMedia on SocialPost {
+  bool get hasLocalMedia =>
+      mediaPath != null && mediaPath!.isNotEmpty && mediaPath != 'null';
+
+  bool get isVideo => kind == SocialPostKind.video;
+
+  bool get isPhoto => kind == SocialPostKind.photo;
+
+  /// WhatsApp-status window — recent media updates.
+  bool get isRecentStory =>
+      hasLocalMedia &&
+      createdAt.isAfter(DateTime.now().subtract(const Duration(hours: 24)));
 }
