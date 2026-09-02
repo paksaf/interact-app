@@ -71,7 +71,7 @@ class MessageDeliveryState {
 
     if (bearer.confirmsEndToEndDelivery) {
       if (readAt != null) {
-        return MessageDeliveryVisual(
+        return const MessageDeliveryVisual(
           kind: MessageDeliveryKind.cloudRead,
           icon: Icons.done_all,
           semanticLabel: 'Read',

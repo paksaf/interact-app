@@ -191,3 +191,29 @@ confused-deputy inbound-send reintroduced.** Location share is user-initiated,
 **Verdict:** the sprint is well-built and honest (SESSION feature matrix marks
 E2E off, social local-only). Safe to commit after `flutter analyze` +
 `flutter test`. E2E stays OFF.
+
+---
+
+## Field + polish pass (2026-09-02, Fable)
+
+**Walkie-talkie field test: PASS ✅** — LAN walkie confirmed working device-to-device
+(in-app Wi-Fi relay, no cloud, no LiveKit). The earlier `/live/token` errno-7 screen was
+the *cloud* LiveKit walkie failing offline; §22 auto-fallback now routes PTT to the LAN
+walkie when cloud is unreachable. Real path validated on hardware.
+
+**5 analyze infos cleared (all `prefer_const`, no behavior change):**
+- `core/offline/message_delivery_state.dart` — `const MessageDeliveryVisual(...)` (cloudRead)
+- `screens/iot/iot_comms_screen.dart` — `const TabBar(...)`
+- `services/push_service.dart` — dropped redundant `foundation.dart` import (widgets re-exports)
+- `test/iot_frame_test.dart` — two `const IotFrame(...)`
+
+`flutter analyze` expected clean (No issues found). `flutter test` still 48 passing.
+
+**Remaining open items — both need operator input / server access (not code-blind):**
+1. **E2E encryption completion (§ pre-key API)** — blocked on: (a) Sahulat pre-key
+   publish/fetch endpoint on the frozen backend, (b) PreKeyStore + SessionBuilder impl,
+   (c) on-device session test, (d) security review. Scaffold stays OFF (`INTERACT_E2E=false`).
+2. **LiveKit API key rotation (§9)** — the old key pair was printed to a terminal and is
+   burned. Rotate on the VPS: `livekit-server generate-keys` → update `/etc/livekit/server.yaml`
+   + hub `LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET` env → `systemctl restart livekit-server`
+   + `pm2 restart interact-connect --update-env`. Needs SSH to the VPS.

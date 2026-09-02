@@ -210,8 +210,8 @@ class _IotCommsScreenState extends ConsumerState<IotCommsScreen> {
               length: 2,
               child: Column(
                 children: [
-                  TabBar(
-                    tabs: const [
+                  const TabBar(
+                    tabs: [
                       Tab(text: 'Inbox', icon: Icon(Icons.inbox, size: 18)),
                       Tab(text: 'Connect', icon: Icon(Icons.settings_input_antenna, size: 18)),
                     ],
