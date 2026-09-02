@@ -231,6 +231,13 @@ class _FriendsMapScreenState extends ConsumerState<FriendsMapScreen> {
               right: 12,
               child: _liveShareBanner(cs),
             ),
+          if (_fixes.isEmpty)
+            const Positioned(
+              left: 24,
+              right: 24,
+              bottom: 92,
+              child: _EmptyMapHint(),
+            ),
         ],
       ),
       floatingActionButton: _liveSession == null
@@ -410,6 +417,43 @@ class _FriendsMapScreenState extends ConsumerState<FriendsMapScreen> {
       isScrollControlled: true,
       showDragHandle: true,
       builder: (_) => _OfflineSheet(map: _map),
+    );
+  }
+}
+
+class _EmptyMapHint extends StatelessWidget {
+  const _EmptyMapHint();
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Material(
+      color: cs.surface.withValues(alpha: 0.92),
+      borderRadius: BorderRadius.circular(14),
+      elevation: 3,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.group_outlined, color: cs.primary, size: 26),
+            const SizedBox(height: 8),
+            Text(
+              'No one is sharing yet',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Ask a friend to share their live location from a chat, or '
+              'connect an IoT GPS tracker — they appear here automatically, '
+              'even offline over Wi-Fi/Bluetooth.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: cs.outline, fontSize: 12.5),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

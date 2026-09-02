@@ -122,6 +122,19 @@ class OfflineHubScreen extends StatelessWidget {
           'pins work over BLE mesh offline.',
     ),
     _Bearer(
+      icon: Icons.map_rounded,
+      name: 'Friends map',
+      reach: _Reach.site,
+      status: _Status.live,
+      blurb:
+          'Friends, peers and IoT trackers on one live map — works offline.',
+      route: '/friends-map',
+      detail:
+          'Live positions plotted on a real map. Download the current area '
+          'for offline use so markers stay visible with no signal. Positions '
+          'ride cloud or LAN/BLE mesh.',
+    ),
+    _Bearer(
       icon: Icons.sensors,
       name: 'Nearby devices',
       reach: _Reach.room,

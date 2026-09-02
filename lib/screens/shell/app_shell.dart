@@ -29,6 +29,7 @@ import '../../services/push_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/inbound_funnel.dart';
 import '../../services/iot/iot_chat_bridge.dart';
+import '../../services/iot/iot_comms_service.dart';
 import '../../services/location_share_service.dart';
 import '../../services/location_trace_service.dart';
 import '../../services/message_repository.dart';
@@ -77,6 +78,9 @@ class _AppShellState extends ConsumerState<AppShell>
     unawaited(ref.read(offlineRouterProvider).ensureBleMesh());
     unawaited(ref.read(inboundFunnelProvider).start());
     unawaited(ref.read(iotChatBridgeProvider).start());
+    // Resume a saved RF-HTTP IoT gateway poll so trackers show on the map
+    // at launch with zero taps (LoRa-BLE stays manual — may be out of range).
+    unawaited(IotCommsService.instance.autoReconnectFromPrefs());
     unawaited(LocationTraceService.instance.load());
     LocationShareService.instance.bind(
       repo: ref.read(messageRepositoryProvider),

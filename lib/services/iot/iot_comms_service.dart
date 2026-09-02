@@ -51,6 +51,21 @@ class IotCommsService {
     _rfAckUrl = prefs.getString(_prefRfAck);
   }
 
+  /// App-launch resume: if an RF-HTTP poll URL was saved, restart the 5s poll
+  /// so GPS/IoT trackers appear on the map with zero taps. LoRa-over-BLE is NOT
+  /// auto-resumed (the bridge may be out of range) — that stays a manual tap.
+  Future<void> autoReconnectFromPrefs() async {
+    if (_connected) return;
+    await loadPrefs();
+    final url = _rfPollUrl?.trim();
+    if (url == null || url.isEmpty) return;
+    try {
+      await connectRfHttp(url, ackUrl: _rfAckUrl);
+    } catch (e) {
+      debugPrint('[iot] RF-HTTP auto-reconnect failed: $e');
+    }
+  }
+
   Future<void> saveRfHttpUrls(String pollUrl, {String? ackUrl}) async {
     _rfPollUrl = pollUrl.trim();
     _rfAckUrl = ackUrl?.trim().isEmpty == true ? null : ackUrl?.trim();
