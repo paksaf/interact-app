@@ -22,13 +22,7 @@ class LocationPinBubble extends StatelessWidget {
   final Color mutedForeground;
 
   Future<void> _open(BuildContext context) async {
-    final ok = await openSharedLocationPin(pin);
-    if (!context.mounted) return;
-    if (!ok) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open Maps for this pin.')),
-      );
-    }
+    await showLocationOpenSheet(context, pin);
   }
 
   @override
@@ -116,7 +110,7 @@ class LocationPinBubble extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              'Tap to open in Maps',
+              'Tap to open in INTERACT Map',
               style: TextStyle(color: mutedForeground, fontSize: 11),
             ),
           ],

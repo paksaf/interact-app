@@ -25,8 +25,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 
 import 'auth_service.dart';
+import 'api_base.dart';
 
-const _kBase = 'https://qurbanisahulat.com';
+/// Server-side backup size cap (~10 MB ciphertext per user).
+const kBackupMaxBytes = 10 * 1024 * 1024;
 
 // PBKDF2 work factor. 120k HMAC-SHA256 iterations is a sane 2026 mobile
 // default — a few hundred ms on device, painful to brute-force. Recorded
@@ -144,7 +146,7 @@ class BackupService {
 
   Future<BackupStatus> status() async {
     final res = await http.get(
-      Uri.parse('$_kBase/api/v1/talk/backup'),
+      Uri.parse('${ApiBase.current}/api/v1/talk/backup'),
       headers: await _headers(),
     );
     if (res.statusCode != 200) {
@@ -171,7 +173,7 @@ class BackupService {
 
     // 1. Export plaintext bundle (own data, server-assembled).
     final exportRes = await http.get(
-      Uri.parse('$_kBase/api/v1/talk/backup/export'),
+      Uri.parse('${ApiBase.current}/api/v1/talk/backup/export'),
       headers: await _headers(),
     );
     if (exportRes.statusCode != 200) {
@@ -214,7 +216,7 @@ class BackupService {
 
     // 3. Upload opaque blob.
     final putRes = await http.put(
-      Uri.parse('$_kBase/api/v1/talk/backup'),
+      Uri.parse('${ApiBase.current}/api/v1/talk/backup'),
       headers: await _headers(),
       body: jsonEncode({'blob': blob, 'meta': meta}),
     );
@@ -233,7 +235,7 @@ class BackupService {
 
   Future<RestoreResult> restore(String passphrase) async {
     final res = await http.get(
-      Uri.parse('$_kBase/api/v1/talk/backup'),
+      Uri.parse('${ApiBase.current}/api/v1/talk/backup'),
       headers: await _headers(),
     );
     if (res.statusCode != 200) {
@@ -280,7 +282,7 @@ class BackupService {
 
   Future<void> deleteBackup() async {
     final res = await http.delete(
-      Uri.parse('$_kBase/api/v1/talk/backup'),
+      Uri.parse('${ApiBase.current}/api/v1/talk/backup'),
       headers: await _headers(),
     );
     if (res.statusCode != 200) {

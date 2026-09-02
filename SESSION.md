@@ -1,11 +1,12 @@
 # INTERACT Talk — session log
 
 **Repo:** `~/dev/INTERACT/apps/interact-app`  
-**Last updated:** 2026-09-02 (UTC+5) — post-Fable audit + Cursor spot-check  
+**Last updated:** 2026-09-02 (UTC+5) — social UI committed + lab deploy  
 **Current build:** `0.5.25+6069`  
 **Git branch:** `feat/talk-offline-mesh-camera`  
-**Fable (committed):** `a2f81fa` — Gateway Console in-app embed (`gateway_console_screen.dart`)  
-**Cursor lane (uncommitted):** E2E pre-key API + client store/upload, field runbook, vitest fixture
+**Latest commit:** `034eccd` — social status/reels/media share  
+**Fable (committed):** `a2f81fa` — Gateway Console in-app embed  
+**Lab deploy:** A23 ✅ + iPhone Paksaf ✅ (6069 + social UI)
 
 Read this file first when resuming Claude/Cursor work on Talk.
 
@@ -15,7 +16,8 @@ Read this file first when resuming Claude/Cursor work on Talk.
 |------|-------|--------|
 | **Gateway Console in-app** | Fable | ✅ **a2f81fa** — Menu → Gateway Console → WebView |
 | **E2E pre-keys** | Cursor | 🟨 Coded; migration applied **local**; prod deploy **frozen** |
-| **Field Wave 1+2** | Cursor | 🟨 Runbook + probe caseId; hardware PASS rows open |
+| **Field Wave 1+2** | Hardware | 🟨 A23 + iPhone on 6069 — run Me → Field validation |
+| **Social status UI** | Cursor | ✅ **034eccd** — stories row + reels + media share |
 | **UAE WhatsApp** | Ops | 🟨 Console ready; **`pm2 start sahulat-baileys-ae`** before UAE QR link |
 | **PK SMS OTP** | Phone | 🟨 capcom6 SIM/carrier — physical phone fix |
 

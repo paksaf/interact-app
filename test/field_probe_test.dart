@@ -40,6 +40,19 @@ void main() {
     expect(wave3.caseIds, contains('RF-LORA-E2E-1'));
   });
 
+  test('suggestPasses marks RF-LAN-1 when lan rx seen', () {
+    final probes = [
+      FieldProbeEvent(
+        id: '1',
+        bearer: 'lan',
+        direction: 'rx',
+        at: DateTime.now(),
+        detail: 'offline-lan',
+      ),
+    ];
+    expect(FieldProbeService.instance.suggestPasses(probes), contains('RF-LAN-1'));
+  });
+
   test('FieldProbeEvent round-trips JSON', () {
     final event = FieldProbeEvent(
       id: 'tx-1',

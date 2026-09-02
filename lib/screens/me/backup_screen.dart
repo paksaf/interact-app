@@ -329,6 +329,10 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                 Text(
                   'Your chats are encrypted on this device with your passphrase '
                   'before upload — the server only stores unreadable ciphertext. '
+                  'Each account can store one encrypted archive (about '
+                  '${(kBackupMaxBytes / (1024 * 1024)).round()} MB). '
+                  'Google Drive / own-cloud export is planned — for now use '
+                  'Back up now, or ask support to link your VPS folder.\n\n'
                   'Keep your passphrase safe: it is never sent anywhere and a lost '
                   'passphrase means the backup can\'t be recovered.',
                   style: TextStyle(color: cs.outline, fontSize: 13, height: 1.4),

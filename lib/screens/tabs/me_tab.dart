@@ -284,13 +284,27 @@ class _MeTabState extends ConsumerState<MeTab> {
       applicationName: 'INTERACT Talk',
       applicationVersion: version ?? '',
       applicationLegalese: '© INTERACT · AGPLv3 — free & open-source forever',
-      children: const [
-        SizedBox(height: 8),
-        Text(
+      children: [
+        const SizedBox(height: 8),
+        const Text(
           'Voice/video-first, offline-capable, AI-assisted communication for '
           'Pakistan and beyond. Works over the internet, local Wi‑Fi/LAN, '
           'nearby BLE mesh, and LoRa — so you can stay connected even when the '
           'network can’t.',
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          children: [
+            TextButton(
+              onPressed: () => _open('https://www.gnu.org/licenses/agpl-3.0.html'),
+              child: const Text('License (AGPLv3)'),
+            ),
+            TextButton(
+              onPressed: () => _open('https://hub.interactpak.com/interact/interact-app'),
+              child: const Text('Source code'),
+            ),
+          ],
         ),
       ],
     );
@@ -537,6 +551,12 @@ class _MeTabState extends ConsumerState<MeTab> {
                 onTap: () => context.push('/find-friends'),
               ),
               _Tile(
+                icon: Icons.map_rounded,
+                label: 'Friends map',
+                subtitle: 'Live pins · works offline (no API key)',
+                onTap: () => context.push('/friends-map'),
+              ),
+              _Tile(
                 icon: Icons.my_location,
                 label: 'Location trace',
                 subtitle: 'See live pins from chat & IoT',
@@ -556,9 +576,28 @@ class _MeTabState extends ConsumerState<MeTab> {
               _Tile(
                 icon: Icons.lock_outline,
                 label: 'End-to-end encryption',
-                subtitle: 'Phase 1.5 — libsignal_protocol_dart',
-                badge: 'Soon',
-                onTap: () => _comingSoon('End-to-end encryption'),
+                subtitle: 'Phase 1.5 — prekey upload scaffold (libsignal next)',
+                badge: 'Beta',
+                onTap: () {
+                  showDialog<void>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('End-to-end encryption'),
+                      content: const Text(
+                        'Phase 1.5 is in progress: device prekeys can sync to the '
+                        'server, but message encryption is not enabled for all chats yet.\n\n'
+                        'Your cloud chats are TLS-protected in transit. Full Signal-style '
+                        'E2E for 1:1 threads lands in the next libsignal rollout.',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('OK'),
+                        ),
+                      ],
+                    ),
+                  );
+                },
               ),
               _Tile(
                 icon: Icons.cloud_sync_outlined,
@@ -731,27 +770,6 @@ class _MeTabState extends ConsumerState<MeTab> {
                   await UpdateService.instance.setAutoDownloadEnabled(v);
                   if (mounted) setState(() => _autoDownload = v);
                 },
-              ),
-              _Tile(
-                icon: Icons.code,
-                label: 'Source code',
-                subtitle: 'hub.interactpak.com/interact/interact-app',
-                onTap: () =>
-                    _open('https://hub.interactpak.com/interact/interact-app'),
-              ),
-              _Tile(
-                icon: Icons.description_outlined,
-                label: 'License',
-                subtitle: 'AGPLv3 — free, open-source forever',
-                onTap: () =>
-                    _open('https://www.gnu.org/licenses/agpl-3.0.html'),
-              ),
-              _Tile(
-                icon: Icons.inventory_2_outlined,
-                label: 'Dependencies',
-                subtitle: 'See NOTICE.md',
-                onTap: () => _open(
-                    'https://hub.interactpak.com/interact/interact-app/raw/branch/main/NOTICE.md'),
               ),
               _Tile(
                 icon: Icons.info_outline,

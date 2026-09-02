@@ -336,6 +336,7 @@ class _SocialPanelScreenState extends ConsumerState<SocialPanelScreen>
         title: 'Friends & Family',
         subtitle: 'Updates · circles · trace',
         showBrandGlyph: true,
+        showHomeShortcut: true,
         actions: [
           IconButton(
             icon: const Icon(Icons.person_search_outlined),
@@ -504,6 +505,15 @@ class _SocialPanelScreenState extends ConsumerState<SocialPanelScreen>
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        Card(
+          child: ListTile(
+            leading: Icon(Icons.map_rounded, color: cs.primary),
+            title: const Text('INTERACT Friends map'),
+            subtitle: const Text('In-app map — live pins, offline tiles'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/friends-map'),
+          ),
+        ),
         Card(
           child: ListTile(
             leading: Icon(Icons.my_location, color: cs.primary),

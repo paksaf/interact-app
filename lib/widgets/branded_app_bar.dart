@@ -8,6 +8,7 @@
 // anchors the wordmark; a soft "large title" variant gives Calls/Chats a
 // modern, breathing header instead of the flat default AppBar.
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 class BrandedAppBar extends StatelessWidget implements PreferredSizeWidget {
   const BrandedAppBar({
@@ -16,6 +17,7 @@ class BrandedAppBar extends StatelessWidget implements PreferredSizeWidget {
     this.subtitle,
     this.actions,
     this.showBrandGlyph = false,
+    this.showHomeShortcut = true,
     this.bottom,
   });
 
@@ -23,6 +25,8 @@ class BrandedAppBar extends StatelessWidget implements PreferredSizeWidget {
   final String? subtitle;
   final List<Widget>? actions;
   final bool showBrandGlyph;
+  /// When true, shows a high-contrast home chip beside the back button.
+  final bool showHomeShortcut;
   final PreferredSizeWidget? bottom;
 
   @override
@@ -34,12 +38,36 @@ class BrandedAppBar extends StatelessWidget implements PreferredSizeWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final canPop = Navigator.canPop(context);
     return AppBar(
       backgroundColor: Colors.transparent,
       elevation: 0,
       scrolledUnderElevation: 0,
       centerTitle: false,
-      titleSpacing: showBrandGlyph ? 16 : null,
+      iconTheme: IconThemeData(color: cs.onSurface, size: 22),
+      leading: canPop
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _NavChip(
+                  icon: Icons.arrow_back_rounded,
+                  tooltip: 'Back',
+                  onTap: () => Navigator.maybePop(context),
+                ),
+                if (showHomeShortcut) ...[
+                  const SizedBox(width: 4),
+                  _NavChip(
+                    icon: Icons.home_rounded,
+                    tooltip: 'Home',
+                    onTap: () => context.go('/calls'),
+                  ),
+                ],
+              ],
+            )
+          : null,
+      leadingWidth: showHomeShortcut && canPop ? 96 : 52,
+      automaticallyImplyLeading: false,
+      titleSpacing: showBrandGlyph ? 16 : (canPop ? 0 : null),
       title: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -81,8 +109,43 @@ class BrandedAppBar extends StatelessWidget implements PreferredSizeWidget {
   }
 }
 
-/// The teal→gold rounded chip carrying the voice-waveform mark — a compact
-/// echo of the launcher icon so the header self-identifies as INTERACT.
+/// The teal→gold rounded chip carrying the voice-waveform mark.
+
+/// High-contrast circular nav control — visible on gradient backgrounds.
+class _NavChip extends StatelessWidget {
+  const _NavChip({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: cs.surface.withValues(alpha: 0.92),
+        elevation: 2,
+        shadowColor: Colors.black26,
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: SizedBox(
+            width: 40,
+            height: 40,
+            child: Icon(icon, size: 22, color: cs.onSurface),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _BrandGlyph extends StatelessWidget {
   const _BrandGlyph({required this.cs});
   final ColorScheme cs;

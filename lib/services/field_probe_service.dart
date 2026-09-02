@@ -112,7 +112,6 @@ class FieldProbeService {
     if (raw == null || raw.isEmpty) return const [];
     try {
       final list = jsonDecode(raw) as List;
-      // Stored newest-first; return the same order for UI + tests.
       return list
           .whereType<Map>()
           .map((e) => FieldProbeEvent.fromJson(e.cast<String, dynamic>()))
@@ -121,6 +120,20 @@ class FieldProbeService {
     } catch (_) {
       return const [];
     }
+  }
+
+  /// Auto-PASS hints from live probe TX/RX (Wave 1 RF-LAN-1 / RF-BLE-1).
+  Set<String> suggestPasses(List<FieldProbeEvent> probes) {
+    final out = <String>{};
+    final hasLanRx = probes.any(
+      (e) => e.direction == 'rx' && (e.bearer == 'lan' || e.bearer.contains('lan')),
+    );
+    if (hasLanRx) out.add('RF-LAN-1');
+    final hasBleRx = probes.any(
+      (e) => e.direction == 'rx' && (e.bearer == 'ble' || e.bearer.contains('ble')),
+    );
+    if (hasBleRx) out.add('RF-BLE-1');
+    return out;
   }
 
   Future<void> clear() async {

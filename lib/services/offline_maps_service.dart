@@ -74,7 +74,11 @@ class OfflineMapsService {
   /// store and serves downloaded packs when the network is gone. Falls back to
   /// a plain network provider if FMTC never initialised.
   TileProvider tileProvider() {
-    if (!_ready) return NetworkTileProvider();
+    if (!_ready) {
+      // Same HTTP client + user-agent as FMTC path — bare NetworkTileProvider
+      // fails on some Android stacks and can show blank / error tiles.
+      return NetworkTileProvider(httpClient: _tileHttpClient());
+    }
     return FMTCTileProvider(
       stores: const {kFriendMapFmtcStore: BrowseStoreStrategy.readUpdateCreate},
       loadingStrategy: BrowseLoadingStrategy.onlineFirst,

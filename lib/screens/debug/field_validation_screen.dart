@@ -173,7 +173,22 @@ class _FieldValidationScreenState extends ConsumerState<FieldValidationScreen> {
       _fcmError = '$e';
     }
     await _refreshProbes();
+    await _applyProbeSuggestions();
     if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _applyProbeSuggestions() async {
+    final suggested = FieldProbeService.instance.suggestPasses(_probes);
+    if (suggested.isEmpty) return;
+    var changed = false;
+    for (final id in suggested) {
+      if (_results[id] != 'PASS') {
+        _results[id] = 'PASS';
+        await _save(id);
+        changed = true;
+      }
+    }
+    if (changed && mounted) setState(() {});
   }
 
   Future<void> _refreshProbes() async {
@@ -313,7 +328,12 @@ class _FieldValidationScreenState extends ConsumerState<FieldValidationScreen> {
                               ),
                             ),
                             TextButton(
-                              onPressed: _loadingProbes ? null : _refreshProbes,
+                              onPressed: _loadingProbes
+                                  ? null
+                                  : () async {
+                                      await _refreshProbes();
+                                      await _applyProbeSuggestions();
+                                    },
                               child: const Text('Refresh'),
                             ),
                             TextButton(

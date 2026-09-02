@@ -69,11 +69,8 @@ class _LocationTraceScreenState extends ConsumerState<LocationTraceScreen> {
       label: fix.displayName,
       live: fix.live,
     );
-    final ok = await openSharedLocationPin(pin);
-    if (!mounted || ok) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Could not open Maps for this fix.')),
-    );
+    if (!mounted) return;
+    await showLocationOpenSheet(context, pin);
   }
 
   String _ageLabel(DateTime at) {

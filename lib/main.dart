@@ -542,6 +542,10 @@ class InteractApp extends ConsumerWidget {
           tertiary: const Color(0xFFBE9A5F),
         ),
         useMaterial3: true,
+        appBarTheme: const AppBarTheme(
+          centerTitle: false,
+          foregroundColor: Color(0xFF0D4A5C),
+        ),
       ),
       darkTheme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
@@ -552,6 +556,7 @@ class InteractApp extends ConsumerWidget {
           tertiary: const Color(0xFFBE9A5F),
         ),
         useMaterial3: true,
+        appBarTheme: const AppBarTheme(centerTitle: false),
       ),
       themeMode: ThemeMode.system,
       routerConfig: _router,
