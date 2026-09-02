@@ -497,29 +497,34 @@ class TalkApi {
 
   /// Call history — reuses CallLog from #186 Phase A. Already live.
   Future<List<Map<String, dynamic>>> callHistory() async {
-    final h = await _headers();
-    final res = await http.get(
-      Uri.parse('$_kBase/api/v1/meetings/log?limit=50'),
-      headers: h,
-    );
-    if (res.statusCode >= 400) {
-      throw Exception('history failed: ${res.statusCode}');
-    }
-    final body = jsonDecode(res.body) as Map<String, dynamic>;
-    return _extractList(body).map((e) {
-      final m = Map<String, dynamic>.from(e as Map);
-      final subjectType = m['subjectType']?.toString();
-      final subjectId = m['subjectId']?.toString();
-      if ((m['threadId'] == null || '${m['threadId']}'.isEmpty) &&
-          subjectType == 'thread' &&
-          subjectId != null &&
-          subjectId.isNotEmpty) {
-        m['threadId'] = subjectId;
+    // Wrapped in runWithFailover so a router/ISP that can't resolve the apex
+    // host (errno 8) falls over to talk.interactpak.com instead of surfacing
+    // a raw DNS error on the Recent-calls card — same as rooms/token below.
+    return ApiBase.runWithFailover(() async {
+      final h = await _headers();
+      final res = await http.get(
+        Uri.parse('$_kBase/api/v1/meetings/log?limit=50'),
+        headers: h,
+      );
+      if (res.statusCode >= 400) {
+        throw Exception('history failed: ${res.statusCode}');
       }
-      m['durationSec'] = m['durationSec'] ?? m['durationSecs'] ?? 0;
-      m['direction'] = m['direction'] ?? 'outgoing';
-      return m;
-    }).toList();
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      return _extractList(body).map((e) {
+        final m = Map<String, dynamic>.from(e as Map);
+        final subjectType = m['subjectType']?.toString();
+        final subjectId = m['subjectId']?.toString();
+        if ((m['threadId'] == null || '${m['threadId']}'.isEmpty) &&
+            subjectType == 'thread' &&
+            subjectId != null &&
+            subjectId.isNotEmpty) {
+          m['threadId'] = subjectId;
+        }
+        m['durationSec'] = m['durationSec'] ?? m['durationSecs'] ?? 0;
+        m['direction'] = m['direction'] ?? 'outgoing';
+        return m;
+      }).toList();
+    });
   }
 
   /// Close the CallLog row minted with the room token. Hangup must POST this

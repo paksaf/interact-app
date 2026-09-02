@@ -3,7 +3,7 @@ import 'package:interact/core/iot/iot_frame.dart';
 
 void main() {
   test('round-trip JSON envelope under 200 bytes', () {
-    final f = const IotFrame(
+    const f = IotFrame(
       id: 'abcd1234',
       kind: IotFrameKind.alert,
       bearer: IotBearer.rfHttp,
@@ -26,7 +26,7 @@ void main() {
   });
 
   test('ack frame references inbound id', () {
-    final inbound = const IotFrame(
+    const inbound = IotFrame(
       id: 'in111111',
       kind: IotFrameKind.alert,
       bearer: IotBearer.loraBle,
