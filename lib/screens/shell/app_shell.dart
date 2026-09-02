@@ -18,6 +18,7 @@ import '../../core/ui/responsive.dart';
 import '../../l10n/app_localizations.dart';
 import '../../widgets/app_background.dart';
 import '../../widgets/in_app_update_banner.dart';
+import '../../widgets/sms_fallback_sheet.dart';
 import '../../services/presence_service.dart';
 import '../../services/device_contacts_index.dart';
 import '../../services/notification_service.dart';
@@ -26,6 +27,12 @@ import '../../services/call_signaling.dart';
 import '../../services/outbox_service.dart';
 import '../../services/push_service.dart';
 import '../../services/auth_service.dart';
+import '../../services/inbound_funnel.dart';
+import '../../services/iot/iot_chat_bridge.dart';
+import '../../services/location_share_service.dart';
+import '../../services/location_trace_service.dart';
+import '../../services/message_repository.dart';
+import '../../services/offline_router.dart';
 
 class AppShell extends ConsumerStatefulWidget {
   const AppShell({super.key, required this.child});
@@ -65,6 +72,18 @@ class _AppShellState extends ConsumerState<AppShell>
     // Offline chat outbox drain (Maps donor pattern).
     OutboxService.instance.startAutoFlush();
     unawaited(OutboxService.instance.flush());
+    // OfflineRouter — LAN + BLE mesh bearers for unified chat delivery.
+    unawaited(ref.read(offlineRouterProvider).ensureLan());
+    unawaited(ref.read(offlineRouterProvider).ensureBleMesh());
+    unawaited(ref.read(inboundFunnelProvider).start());
+    unawaited(ref.read(iotChatBridgeProvider).start());
+    unawaited(LocationTraceService.instance.load());
+    LocationShareService.instance.bind(
+      repo: ref.read(messageRepositoryProvider),
+      auth: ref.read(authServiceProvider),
+    );
+    OutboxService.instance.routerHandler =
+        ref.read(offlineRouterProvider).replayOutboxItem;
     _outboxSub = OutboxService.instance.changes.listen((n) {
       if (mounted) setState(() => _outboxPending = n);
     });
@@ -156,6 +175,21 @@ class _AppShellState extends ConsumerState<AppShell>
     // do not clear/re-show MaterialBanner on every progress tick.
   }
 
+  Future<void> _offerSmsForOutbox() async {
+    final item = await OutboxService.instance.firstPendingChatText();
+    if (item == null || !mounted) return;
+    final bodyMap = (item['body'] as Map?)?.cast<String, dynamic>();
+    final body = (bodyMap?['body'] as String?)?.trim() ?? '';
+    if (body.isEmpty) return;
+    await showSmsFallbackSheet(
+      context: context,
+      ref: ref,
+      toPhone: '',
+      body: body,
+      threadId: item['threadId'] as String?,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
@@ -182,46 +216,66 @@ class _AppShellState extends ConsumerState<AppShell>
                 color: Theme.of(context).colorScheme.tertiaryContainer,
                 child: SafeArea(
                   bottom: false,
-                  child: InkWell(
-                    onTap: () => OutboxService.instance.flush(),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 8),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.cloud_off_outlined,
-                            size: 16,
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onTertiaryContainer,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'Offline queue · $_outboxPending message'
-                              '${_outboxPending == 1 ? '' : 's'} pending',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .onTertiaryContainer,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: InkWell(
+                            onTap: () => OutboxService.instance.flush(),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 8),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.cloud_off_outlined,
+                                    size: 16,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onTertiaryContainer,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      'Offline queue · $_outboxPending message'
+                                      '${_outboxPending == 1 ? '' : 's'} pending',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onTertiaryContainer,
+                                      ),
+                                    ),
+                                  ),
+                                  Text(
+                                    'Retry',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700,
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .onTertiaryContainer,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           ),
-                          Text(
-                            'Retry',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onTertiaryContainer,
-                            ),
+                        ),
+                        TextButton.icon(
+                          onPressed: _offerSmsForOutbox,
+                          icon: const Icon(Icons.sms, size: 16),
+                          label: const Text('SMS'),
+                          style: TextButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            foregroundColor: Theme.of(context)
+                                .colorScheme
+                                .onTertiaryContainer,
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   ),
                 ),

@@ -11,8 +11,10 @@ import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import 'field_probe_service.dart';
+
 final loraBridgeServiceProvider =
-    Provider<LoraBridgeService>((ref) => LoraBridgeService());
+    Provider<LoraBridgeService>((ref) => LoraBridgeService.instance);
 
 /// Must match firmware/lora_ble_bridge/lora_ble_bridge.ino
 class LoraBridgeUuids {
@@ -45,6 +47,9 @@ class LoraBridgeMessage {
 }
 
 class LoraBridgeService {
+  LoraBridgeService._();
+  static final LoraBridgeService instance = LoraBridgeService._();
+
   final _ble = FlutterReactiveBle();
   StreamSubscription<DiscoveredDevice>? _scanSub;
   StreamSubscription<ConnectionStateUpdate>? _connSub;
@@ -203,6 +208,10 @@ class LoraBridgeService {
         body: body,
         at: DateTime.now(),
         isMine: false,
+      ));
+      unawaited(FieldProbeService.instance.recordRx(
+        bearer: 'lora',
+        detail: body,
       ));
     });
 

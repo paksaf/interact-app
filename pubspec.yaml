@@ -1,7 +1,7 @@
 name: interact
 description: "INTERACT — voice/video-first, offline-capable, AI-assisted communication super-app. Free, open-source (AGPLv3), Pakistan-first."
 publish_to: "none"
-version: 0.5.16+6055
+version: 0.5.25+6069
 
 environment:
   sdk: ^3.6.0
@@ -26,6 +26,8 @@ dependencies:
 
   # ── Storage ─────────────────────────────────────────────────────────
   shared_preferences: ^2.2.0
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
   path_provider: ^2.1.0
   flutter_secure_storage: ^9.2.0
 
@@ -114,6 +116,9 @@ dependencies:
   # never sees the passphrase or plaintext. See backup_service.dart.
   cryptography: ^2.7.0
 
+  # ── Signal E2E (Phase 1.5) — pure-Dart libsignal; gated by install + flag ──
+  libsignal_protocol_dart: ^0.8.2
+
   # ── VPS auto-update (side-load channel) ─────────────────────────────
   # update_service.dart checks downloads.interactpak.com/interact/latest.json,
   # compares versionCode (package_info_plus), and on a newer build opens the
@@ -191,6 +196,9 @@ dependencies:
   # BSD-3 BLE (commercial-safe). Replaces flutter_blue_plus — see
   # docs/COMMERCIAL_DEPS_AND_RF_PK.md + sahl_mesh/docs/LICENSE_DECISION.md
   flutter_reactive_ble: ^5.5.0
+  # 1.0.0 lacks AGP namespace → Android release build fails on modern Gradle.
+  # 2.x matches the walkie GATT API (clearServices, deviceId on write callback).
+  ble_peripheral: ^2.4.0
   permission_handler: ^11.3.0
   dio: ^5.11.0
   open_filex: ^4.7.0

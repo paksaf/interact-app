@@ -17,6 +17,8 @@ import 'package:go_router/go_router.dart';
 
 import '../../models/chat.dart';
 import '../../services/api_base.dart';
+import '../../services/ai_contact_service.dart';
+import '../../services/iot/iot_chat_bridge.dart';
 import '../../services/auth_service.dart';
 import '../../services/block_service.dart';
 import '../../services/chat_api.dart';
@@ -53,26 +55,32 @@ class _ChatsTabState extends ConsumerState<ChatsTab> {
   /// sign-in; a DNS/offline failure fails over [ApiBase] once then retries.
   Future<List<ChatThread>> _loadThreads() async {
     final api = ref.read(chatApiProvider);
+    List<ChatThread> threads;
     try {
-      return await api.listAllThreads();
+      threads = await api.listAllThreads();
     } catch (e) {
       if (e.toString().contains('401')) {
         final outcome =
             await ref.read(authServiceProvider).attemptSilentResume();
         if (outcome == RefreshOutcome.refreshed ||
             outcome == RefreshOutcome.offlineKeep) {
-          return api.listAllThreads();
+          threads = await api.listAllThreads();
+        } else {
+          rethrow;
         }
-      }
-      // HS8145C5 / ISP resolvers intermittently fail qurbanisahulat.com
-      // (errno 8) while talk.interactpak.com still resolves — fail over
-      // then retry once so Retry isn't a no-op against the dead host.
-      if (ApiBase.isDnsOrOffline(e)) {
+      } else if (ApiBase.isDnsOrOffline(e)) {
         await ApiBase.checkAndMaybeSwitch(force: true);
-        return api.listAllThreads();
+        threads = await api.listAllThreads();
+      } else {
+        rethrow;
       }
-      rethrow;
     }
+    final ai = ref.read(aiContactServiceProvider).syntheticThread();
+    final iot = ref.read(iotChatBridgeProvider).syntheticThread();
+    final out = <ChatThread>[];
+    if (!threads.any((t) => t.id == kAiThreadId)) out.add(ai);
+    if (!threads.any((t) => t.id == kIotAlertsThreadId)) out.add(iot);
+    return [...out, ...threads];
   }
 
   @override

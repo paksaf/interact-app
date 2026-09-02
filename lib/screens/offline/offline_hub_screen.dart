@@ -104,6 +104,22 @@ class OfflineHubScreen extends StatelessWidget {
       status: _Status.live,
       blurb: 'Relay short texts phone‑to‑phone, hopping device to device.',
       route: '/nearby-mesh',
+      detail:
+          'Uses sahl_mesh gossip. Link mesh pubkey to Talk identity via '
+          'QR on Nearby mesh → identity button (RF-MESH-BIND-1).',
+    ),
+    _Bearer(
+      icon: Icons.my_location,
+      name: 'Location trace',
+      reach: _Reach.site,
+      status: _Status.live,
+      blurb:
+          'Share GPS live or see IoT tracker fixes — phone, LAN, BLE, LoRa.',
+      route: '/location-trace',
+      detail:
+          'Live share from a 1:1 chat (attach → Share live location). IoT '
+          'gateways can publish lat/lng in RF HTTP poll JSON. Compact loc: '
+          'pins work over BLE mesh offline.',
     ),
     _Bearer(
       icon: Icons.sensors,
@@ -117,13 +133,13 @@ class OfflineHubScreen extends StatelessWidget {
       icon: Icons.sms,
       name: 'SMS fallback',
       reach: _Reach.national,
-      status: _Status.planned,
+      status: _Status.live,
       blurb: 'When there is signal but no data — send as a text message.',
+      route: '/chats',
       detail:
-          'The most common rural failure is signal‑but‑no‑data, where '
-          'Wi‑Fi and Bluetooth reach only the room. SMS still gets through, '
-          'and INTERACT already runs the gateways for it. Planned as a '
-          'user‑confirmed fallback (never silent — the cost is visible).',
+          'User‑confirmed only — standard SMS rates apply. When cloud and '
+          'offline bearers fail, open a 1:1 chat and tap SMS on the queue '
+          'banner, or use Send failed → SMS. Never sends silently.',
     ),
     _Bearer(
       icon: Icons.nfc,
@@ -150,6 +166,15 @@ class OfflineHubScreen extends StatelessWidget {
           'other and open a data path with no access point and no pairing dance. '
           'The modern answer to Wi‑Fi Direct’s same‑OS limit. '
           'Plugin‑gated.',
+    ),
+    _Bearer(
+      icon: Icons.router,
+      name: 'IoT gateway',
+      reach: _Reach.area,
+      status: _Status.live,
+      blurb:
+          'LoRa ESP32, 433 MHz RF→HTTP, AutoSense edge — inbound signal + one-tap ACK.',
+      route: '/iot-comms',
     ),
     _Bearer(
       icon: Icons.cell_tower,

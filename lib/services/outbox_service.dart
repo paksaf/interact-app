@@ -13,8 +13,16 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/offline/talk_bearer_adapter.dart';
+import '../models/offline_frame.dart';
+import '../models/talk_bearer.dart';
+import 'api_base.dart';
+
 /// Optional handler for kinds that need more than a JSON POST (e.g. upload).
 typedef OutboxItemHandler = Future<bool> Function(Map<String, dynamic> item);
+
+/// Replay chat_text rows through OfflineRouter (cloud → LAN → mesh).
+typedef OutboxRouterHandler = Future<bool> Function(Map<String, dynamic> item);
 
 class OutboxService {
   OutboxService._();
@@ -32,6 +40,9 @@ class OutboxService {
 
   /// Wired from ChatApi so attachment flush can call uploadMedia + send.
   OutboxItemHandler? attachmentHandler;
+
+  /// Wired from AppShell — chat_text items flush via OfflineRouter.send.
+  OutboxRouterHandler? routerHandler;
 
   /// Fires with pending count after enqueue/flush.
   Stream<int> get changes => _changed.stream;
@@ -58,6 +69,59 @@ class OutboxService {
     }
     await enqueue(url: url, body: body, headers: headers, kind: kind);
     return false;
+  }
+
+  /// Canonical chat_text row with full [OfflineFrame] + bearer preference.
+  Future<void> enqueueFrame({
+    required OfflineFrame frame,
+    List<TalkBearer>? bearerPreference,
+    TalkBearer? lastBearer,
+    Map<String, String>? headers,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = _read(prefs);
+      final pref = bearerPreference ?? kDefaultBearerPreference;
+      final url =
+          '${ApiBase.current}/api/v1/chat/threads/${frame.threadId}/messages';
+      list.add({
+        'id': frame.id,
+        'kind': 'chat_text',
+        'threadId': frame.threadId,
+        'frame': frame.toJson(),
+        'bearerPreference': pref.map((b) => b.wire).toList(),
+        if (lastBearer != null) 'lastBearer': lastBearer.wire,
+        'senderId': frame.senderId,
+        'senderName': frame.senderName,
+        if (frame.targetPeerUserId != null)
+          'targetPeerUserId': frame.targetPeerUserId,
+        'url': url,
+        'body': {
+          'body': frame.body,
+          'kind': 'text',
+          if (frame.replyToId != null) 'replyToId': frame.replyToId,
+        },
+        if (headers != null && headers.isNotEmpty) 'headers': headers,
+        'ts': DateTime.now().millisecondsSinceEpoch,
+        'attempts': 0,
+      });
+      await prefs.setString(_key, jsonEncode(_prune(list)));
+      _changed.add(list.length);
+    } catch (e) {
+      if (kDebugMode) debugPrint('Talk outbox enqueueFrame failed: $e');
+    }
+  }
+
+  /// Remove a row after successful router replay (optional — flush also drops on ok).
+  Future<void> removeItemId(String? id) async {
+    if (id == null || id.isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = _read(prefs)
+        ..removeWhere((item) => item['id'] == id);
+      await prefs.setString(_key, jsonEncode(_prune(list)));
+      _changed.add(list.length);
+    } catch (_) {}
   }
 
   Future<void> enqueue({
@@ -128,6 +192,8 @@ class OutboxService {
         var ok = false;
         if (kind == 'chat_attach_local' && attachmentHandler != null) {
           ok = await attachmentHandler!(item);
+        } else if (kind == 'chat_text' && routerHandler != null) {
+          ok = await routerHandler!(item);
         } else {
           final url = item['url'] as String?;
           final body = (item['body'] as Map?)?.cast<String, dynamic>();
@@ -169,6 +235,19 @@ class OutboxService {
     } catch (_) {
       return 0;
     }
+  }
+
+  /// First queued chat_text row — optional [threadId] filter for thread UI.
+  Future<Map<String, dynamic>?> firstPendingChatText({String? threadId}) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      for (final item in _read(prefs)) {
+        if ((item['kind'] as String?) != 'chat_text') continue;
+        if (threadId != null && item['threadId'] != threadId) continue;
+        return item;
+      }
+    } catch (_) {}
+    return null;
   }
 
   List<Map<String, dynamic>> _read(SharedPreferences prefs) {

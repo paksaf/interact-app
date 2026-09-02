@@ -54,6 +54,9 @@ class LiveTile {
   /// Role from the token metadata ("host"/"moderator"/"speaker"/…).
   String? role;
 
+  /// App focus from participant metadata: foreground | background.
+  String? focus;
+
   bool get hasVideo => videoTrack != null;
 }
 
@@ -169,7 +172,8 @@ class LiveRoomController extends ChangeNotifier {
         videoTrack: _videoOf(lp),
       )
         ..area = meta['area'] as String?
-        ..role = meta['role'] as String?);
+        ..role = meta['role'] as String?
+        ..focus = meta['focus'] as String?);
     }
     for (final p in room.remoteParticipants.values) {
       final meta = _metaOf(p);
@@ -183,7 +187,8 @@ class LiveRoomController extends ChangeNotifier {
         videoTrack: _videoOf(p),
       )
         ..area = meta['area'] as String?
-        ..role = meta['role'] as String?);
+        ..role = meta['role'] as String?
+        ..focus = meta['focus'] as String?);
     }
     return out;
   }
@@ -596,9 +601,25 @@ class LiveRoomController extends ChangeNotifier {
       final merged = Map<String, dynamic>.from(_metaOf(lp));
       merged['area'] = deviceAreaString();
       merged['joinedAt'] = DateTime.now().toUtc().toIso8601String();
+      merged['focus'] ??= 'foreground';
       await lp.setMetadata(jsonEncode(merged));
     } catch (e) {
       debugPrint('[livekit] self-info metadata skipped: $e');
+    }
+  }
+
+  /// Publish foreground/background focus for host audience analytics.
+  Future<void> publishAppFocus(bool foreground) async {
+    try {
+      final lp = _room?.localParticipant;
+      if (lp == null) return;
+      final merged = Map<String, dynamic>.from(_metaOf(lp));
+      merged['focus'] = foreground ? 'foreground' : 'background';
+      merged['area'] ??= deviceAreaString();
+      await lp.setMetadata(jsonEncode(merged));
+      notifyListeners();
+    } catch (e) {
+      debugPrint('[livekit] focus metadata skipped: $e');
     }
   }
 

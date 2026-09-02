@@ -28,12 +28,21 @@ import 'package:sahulat_common/sahulat_common.dart';
 
 import '../../core/l10n/locale_prefs.dart';
 import '../../l10n/app_localizations.dart';
+import '../../core/offline/message_delivery_state.dart';
 import '../../models/chat.dart';
+import '../../services/ai_contact_service.dart';
 import '../../services/chat_api.dart';
+import '../../services/chat_connectivity_service.dart';
+import '../../services/message_repository.dart';
+import '../../services/location_share_service.dart';
+import '../../utils/shared_location_pin.dart';
+import '../../models/talk_bearer.dart';
 import '../../services/message_watcher.dart';
 import '../../services/call_signaling.dart';
 import '../../services/auth_service.dart';
 import '../../services/talk_flags.dart';
+import '../../services/iot/iot_chat_bridge.dart';
+import '../../services/thread_peer_registry.dart';
 import '../../services/outbox_service.dart';
 import '../../services/talk_api.dart';
 import '../../services/transcription_service.dart';
@@ -41,6 +50,10 @@ import '../../services/voice/talk_stt_service.dart';
 import '../../services/voice/talk_tts_service.dart';
 import '../../utils/chat_formatters.dart';
 import '../../utils/phone_normalize.dart';
+import '../../widgets/chat/offline_chat_banner.dart';
+import '../../widgets/chat/location_pin_bubble.dart';
+import '../../widgets/chat/offline_peer_sheet.dart';
+import '../../widgets/sms_fallback_sheet.dart';
 import 'chat_ai_actions.dart';
 import 'message_search_screen.dart';
 import 'communities_screen.dart';
@@ -117,19 +130,69 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
   }
 
   StreamSubscription<int>? _outboxSub;
+  StreamSubscription<List<Message>>? _localMsgSub;
   int _outboxPending = 0;
+
+  bool get _isAiThread => widget.thread.id == kAiThreadId;
+  bool get _isIotThread => widget.thread.id == kIotAlertsThreadId;
+  bool get _isLocalOnlyThread => _isAiThread || _isIotThread;
+
+  Future<void> _bindThreadPeer() async {
+    if (_isLocalOnlyThread) return;
+    var peerUserId = _currentThread.peerUserId;
+    if ((peerUserId == null || peerUserId.isEmpty) && _myId != null) {
+      for (final p in _currentThread.participants) {
+        if (p.userId.isNotEmpty && p.userId != _myId) {
+          peerUserId = p.userId;
+          break;
+        }
+      }
+    }
+    if (peerUserId == null || peerUserId.isEmpty) {
+      final myId = await ref.read(authServiceProvider).localUserId();
+      if (myId != null) {
+        for (final p in _currentThread.participants) {
+          if (p.userId.isNotEmpty && p.userId != myId) {
+            peerUserId = p.userId;
+            break;
+          }
+        }
+      }
+    }
+    await ThreadPeerRegistry.instance.bindThreadPeer(
+      _currentThread.id,
+      peerUserId,
+    );
+  }
 
   @override
   void initState() {
     super.initState();
     _currentThread = widget.thread;
+    unawaited(_bindThreadPeer());
     // Cache my local uuid for the channel-owner check (read-only gate).
     ref.read(authServiceProvider).localUserId().then((id) {
       if (mounted && id != null) setState(() => _myId = id);
     }).catchError((_) {});
     // Suppress new-message notifications for the conversation on screen.
     ref.read(messageWatcherProvider).activeThreadId = widget.thread.id;
-    _messages = ref.read(chatApiProvider).messages(widget.thread.id);
+    // Invalidate connectivity banner when opening a thread.
+    ref.invalidate(chatConnectivityProvider);
+    if (_isLocalOnlyThread) {
+      _messages = ref.read(messageRepositoryProvider).loadLocal(widget.thread.id);
+    } else {
+      _messages = ref.read(chatApiProvider).messages(widget.thread.id);
+    }
+    _localMsgSub = ref
+        .read(messageRepositoryProvider)
+        .watchThread(widget.thread.id)
+        .listen((local) {
+      if (!mounted || local.isEmpty) return;
+      setState(() {
+        _latestMessages = _mergeMessages(_latestMessages, local);
+        _messages = Future.value(_latestMessages);
+      });
+    });
     // Seed _latestMessages on first load too — the FutureBuilder will
     // also seed it, but this covers the moment _openAiMenu fires
     // before the first build cycle resolves.
@@ -190,6 +253,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
     unawaited(TalkSttService.instance.cancel());
     unawaited(TalkTtsService.instance.stop());
     _outboxSub?.cancel();
+    _localMsgSub?.cancel();
     _textCtrl.removeListener(_onTextChanged);
     _pollTimer?.cancel();
     _typingDebounce?.cancel();
@@ -214,7 +278,32 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
     ref.read(chatApiProvider).sendTyping(widget.thread.id);
   }
 
+  List<Message> _mergeMessages(List<Message> server, List<Message> local) {
+    final byId = <String, Message>{};
+    for (final m in server) {
+      byId[m.id] = m;
+    }
+    for (final m in local) {
+      if (m.pending || (m.bearer != null && m.bearer != TalkBearer.cloud.wire)) {
+        byId.putIfAbsent(m.id, () => m);
+      }
+    }
+    return byId.values.toList()..sort((a, b) => a.sentAt.compareTo(b.sentAt));
+  }
+
   Future<void> _refresh() async {
+    if (_isAiThread) {
+      try {
+        final local = await ref.read(messageRepositoryProvider).loadLocal(widget.thread.id);
+        if (!mounted) return;
+        setState(() {
+          _latestMessages = local;
+          _messages = Future.value(local);
+          _firstLoadDone = true;
+        });
+      } catch (_) {}
+      return;
+    }
     // Use the combined loader so we get the latest thread metadata
     // (participant typingAt / lastReadAt cursors) AND the messages in
     // one round-trip. Updating _currentThread is what makes the typing
@@ -232,11 +321,13 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
             _currentThread.peerHasInteractInstalled ??
                 view.thread.peerHasInteractInstalled,
       );
-      _latestMessages = view.messages;
+      _latestMessages = await ref
+          .read(messageRepositoryProvider)
+          .mergeWithServer(widget.thread.id, view.messages);
       _firstLoadDone = true;
       setState(() {
         _currentThread = mergedThread;
-        _messages = Future.value(view.messages);
+        _messages = Future.value(_latestMessages);
       });
       // Keep the newest message visible after a poll brings new ones — but
       // only if the user is parked at/near the bottom. Called right after
@@ -588,28 +679,72 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
     }
   }
 
+  Future<void> _offerSmsFallback(String body) async {
+    if (_isLocalOnlyThread || _currentThread.isGroup) return;
+    final phone = peerPhoneFromThreadHints(
+      subjectId: _currentThread.subjectId,
+      title: _currentThread.title,
+    );
+    await showSmsFallbackSheet(
+      context: context,
+      ref: ref,
+      toPhone: phone ?? '',
+      body: body,
+      threadId: _currentThread.id,
+    );
+  }
+
+  Future<void> _offerSmsForPendingOutbox() async {
+    final item = await OutboxService.instance.firstPendingChatText(
+      threadId: _currentThread.id,
+    );
+    if (item == null || !mounted) return;
+    final bodyMap = (item['body'] as Map?)?.cast<String, dynamic>();
+    final body = (bodyMap?['body'] as String?)?.trim() ?? '';
+    if (body.isEmpty) return;
+    await _offerSmsFallback(body);
+  }
+
   Future<void> _sendText() async {
     final text = _textCtrl.text.trim();
     if (text.isEmpty || _sending) return;
     setState(() => _sending = true);
     try {
-      final sent = await ref
-          .read(chatApiProvider)
-          .sendText(widget.thread.id, text, replyToId: _replyingTo?.id);
+      if (_isAiThread) {
+        final added =
+            await ref.read(aiContactServiceProvider).sendUserMessage(text);
+        _textCtrl.clear();
+        if (mounted) {
+          setState(() {
+            _latestMessages = [..._latestMessages, ...added];
+            _messages = Future.value(_latestMessages);
+          });
+        }
+        _scrollToBottom();
+        return;
+      }
+
+      final sent = await ref.read(messageRepositoryProvider).sendText(
+            widget.thread.id,
+            text,
+            replyToId: _replyingTo?.id,
+            targetPeerUserId: _currentThread.peerUserId,
+          );
       _textCtrl.clear();
       if (mounted) setState(() => _replyingTo = null);
       if (sent.pending) {
-        // Offline queue — keep bubble locally until flush succeeds.
         setState(() {
           _latestMessages = [..._latestMessages, sent];
           _messages = Future.value(_latestMessages);
         });
         if (mounted) {
+          final label = sent.bearer == TalkBearer.lan.wire
+              ? 'Sent via LAN'
+              : sent.bearer == TalkBearer.bleMesh.wire
+                  ? 'Sent via BLE mesh'
+                  : 'Queued — will send when you’re back online';
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Queued — will send when you’re back online'),
-              duration: Duration(seconds: 2),
-            ),
+            SnackBar(content: Text(label), duration: const Duration(seconds: 2)),
           );
         }
         _scrollToBottom();
@@ -620,7 +755,15 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Send failed: $e')),
+        SnackBar(
+          content: Text('Send failed: $e'),
+          action: !_isLocalOnlyThread && !_currentThread.isGroup
+              ? SnackBarAction(
+                  label: 'SMS',
+                  onPressed: () => unawaited(_offerSmsFallback(text)),
+                )
+              : null,
+        ),
       );
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -631,8 +774,12 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
 
   /// Share a location pin as chat text + Interact Maps deep link so the peer
   /// can open Navigate on the same coordinates (Maps donor path).
-  Future<void> _shareLocationPin() async {
+  Future<void> _shareLocationPin({bool live = false}) async {
     if (_sending) return;
+    if (live) {
+      await _startLiveLocationShare();
+      return;
+    }
     setState(() => _sending = true);
     try {
       var perm = await Geolocator.checkPermission();
@@ -652,18 +799,15 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
       final pos = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
       ).timeout(const Duration(seconds: 12));
-      final lat = pos.latitude.toStringAsFixed(6);
-      final lng = pos.longitude.toStringAsFixed(6);
-      final mapsLink =
-          'https://talk.interactpak.com/j/LOC?lat=$lat&lng=$lng';
-      // Prefer Maps deep link when installed; https fallback is human-readable.
-      final deep =
-          'interactmaps://route?lat=$lat&lng=$lng&name=Shared%20pin';
-      final body =
-          '📍 Shared location\n$lat, $lng\nOpen in Maps: $deep\n$mapsLink';
-      final sent = await ref
-          .read(chatApiProvider)
-          .sendText(widget.thread.id, body);
+      final body = formatLocationPinBody(
+        lat: pos.latitude,
+        lng: pos.longitude,
+      );
+      final sent = await ref.read(messageRepositoryProvider).sendText(
+            widget.thread.id,
+            body,
+            targetPeerUserId: _currentThread.peerUserId,
+          );
       if (sent.pending) {
         setState(() {
           _latestMessages = [..._latestMessages, sent];
@@ -682,6 +826,64 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
     } finally {
       if (mounted) setState(() => _sending = false);
     }
+  }
+
+  Future<void> _startLiveLocationShare() async {
+    if (_currentThread.isGroup || _currentThread.isChannel || _isLocalOnlyThread) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Live share works in 1:1 chats only.'),
+          ),
+        );
+      }
+      return;
+    }
+    final duration = await showModalBottomSheet<Duration>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: const Text('Share live · 15 minutes'),
+              onTap: () => Navigator.pop(ctx, const Duration(minutes: 15)),
+            ),
+            ListTile(
+              title: const Text('Share live · 1 hour'),
+              onTap: () => Navigator.pop(ctx, const Duration(hours: 1)),
+            ),
+            ListTile(
+              title: const Text('Share live · until I stop'),
+              onTap: () => Navigator.pop(ctx, const Duration(hours: 8)),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (duration == null || !mounted) return;
+    final ok = await LocationShareService.instance.startLiveShare(
+      threadId: widget.thread.id,
+      duration: duration,
+      targetPeerUserId: _currentThread.peerUserId,
+    );
+    if (!mounted) return;
+    if (!ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Location permission required for live share.')),
+      );
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Live location sharing started (${duration.inMinutes} min)'),
+        action: SnackBarAction(
+          label: 'Trace',
+          onPressed: () => context.push('/location-trace'),
+        ),
+      ),
+    );
   }
 
   /// Attach flow: pick Photo / Video / File → 50 MB guard → upload to
@@ -741,6 +943,12 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
               subtitle: const Text('Pin + open in Interact Maps'),
               onTap: () => Navigator.pop(ctx, 'location'),
             ),
+            ListTile(
+              leading: const Icon(Icons.my_location),
+              title: const Text('Share live location'),
+              subtitle: const Text('Updates every minute · offline-capable'),
+              onTap: () => Navigator.pop(ctx, 'location-live'),
+            ),
           ],
         ),
       ),
@@ -760,6 +968,20 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
     if (choice == 'location') {
       await _shareLocationPin();
       return;
+    }
+    if (choice == 'location-live') {
+      await _shareLocationPin(live: true);
+      return;
+    }
+
+    if (choice != 'location' && choice != 'location-live') {
+      final cloudOk = await ChatMediaPolicy.canUploadToCloud();
+      if (!cloudOk && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text(ChatMediaPolicy.offlineMediaMessage)),
+        );
+        return;
+      }
     }
 
     File? file;
@@ -960,6 +1182,14 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
     _recordTimer?.cancel();
     setState(() => _recording = false);
     if (path == null) return;
+    if (!await ChatMediaPolicy.canUploadToCloud()) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text(ChatMediaPolicy.offlineMediaMessage)),
+        );
+      }
+      return;
+    }
     final durSec = _recordElapsed.inSeconds.clamp(1, 600);
 
     setState(() => _sending = true);
@@ -1356,6 +1586,31 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
               ),
             ),
           ),
+          if (!_currentThread.isGroup &&
+              !_currentThread.isChannel &&
+              !_isLocalOnlyThread)
+            IconButton(
+              icon: const Icon(Icons.lan_outlined),
+              tooltip: 'Offline LAN peer',
+              onPressed: () async {
+                var peerUserId = _currentThread.peerUserId;
+                if ((peerUserId == null || peerUserId.isEmpty) &&
+                    _myId != null) {
+                  for (final p in _currentThread.participants) {
+                    if (p.userId.isNotEmpty && p.userId != _myId) {
+                      peerUserId = p.userId;
+                      break;
+                    }
+                  }
+                }
+                await showOfflinePeerSheet(
+                  context: context,
+                  threadId: _currentThread.id,
+                  peerUserId: peerUserId,
+                  peerDisplayName: _currentThread.title,
+                );
+              },
+            ),
           IconButton(
             icon: const Icon(Icons.videocam_outlined),
             tooltip: 'Video call',
@@ -1394,6 +1649,15 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
       ),
       body: Column(
         children: [
+          if (!_isLocalOnlyThread)
+            OfflineChatBanner(
+              threadId: _currentThread.id,
+              outboxPending: _outboxPending,
+              peerUserId: _currentThread.peerUserId,
+              peerDisplayName: _currentThread.title,
+              isLocalOnlyThread: _isLocalOnlyThread,
+              isGroup: _currentThread.isGroup || _currentThread.isChannel,
+            ),
           if ((_currentThread.disappearingSeconds ?? 0) > 0)
             Material(
               color: cs.primaryContainer.withValues(alpha: 0.55),
@@ -1583,36 +1847,57 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
           if (_outboxPending > 0)
             Material(
               color: Theme.of(context).colorScheme.tertiaryContainer,
-              child: InkWell(
-                onTap: () => OutboxService.instance.flush(),
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  child: Row(
-                    children: [
-                      Icon(Icons.cloud_upload_outlined,
-                          size: 16,
-                          color: Theme.of(context)
-                              .colorScheme
-                              .onTertiaryContainer),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          '$_outboxPending waiting to send — tap to retry now',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onTertiaryContainer,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: InkWell(
+                        onTap: () => OutboxService.instance.flush(),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 8),
+                          child: Row(
+                            children: [
+                              Icon(Icons.cloud_upload_outlined,
+                                  size: 16,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onTertiaryContainer),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  '$_outboxPending waiting to send — tap to retry',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onTertiaryContainer,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                    if (!_isLocalOnlyThread && !_currentThread.isGroup)
+                      TextButton.icon(
+                        onPressed: _offerSmsForPendingOutbox,
+                        icon: const Icon(Icons.sms, size: 16),
+                        label: const Text('SMS'),
+                        style: TextButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                          foregroundColor: Theme.of(context)
+                              .colorScheme
+                              .onTertiaryContainer,
+                        ),
+                      ),
+                  ],
                 ),
               ),
             ),
-          if (_isReadOnlyChannel)
+          if (_isReadOnlyChannel || _isIotThread)
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -1620,10 +1905,31 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.campaign_outlined, size: 18, color: Theme.of(context).colorScheme.outline),
+                  Icon(
+                    _isIotThread ? Icons.sensors : Icons.campaign_outlined,
+                    size: 18,
+                    color: Theme.of(context).colorScheme.outline,
+                  ),
                   const SizedBox(width: 8),
-                  Text('Broadcast channel — only the owner can post',
-                      style: TextStyle(color: Theme.of(context).colorScheme.outline, fontSize: 13)),
+                  Flexible(
+                    child: Text(
+                      _isIotThread
+                          ? 'Read-only alert log — tap ACK on IoT gateway'
+                          : 'Broadcast channel — only the owner can post',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.outline,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                  if (_isIotThread) ...[
+                    const SizedBox(width: 8),
+                    TextButton(
+                      onPressed: () => context.push('/iot-comms'),
+                      child: const Text('Open gateway'),
+                    ),
+                  ],
                 ],
               ),
             )
@@ -1826,8 +2132,21 @@ class _MessageBubble extends StatelessWidget {
                           padding: const EdgeInsets.only(top: 6),
                           child: Text(message.body, style: TextStyle(color: fg)),
                         ),
-                    ] else
-                      Text(message.body, style: TextStyle(color: fg)),
+                    ] else ...[
+                      Builder(
+                        builder: (context) {
+                          final pin = parseSharedLocationPin(message.body);
+                          if (pin != null) {
+                            return LocationPinBubble(
+                              pin: pin,
+                              foreground: fg,
+                              mutedForeground: fg.withValues(alpha: 0.75),
+                            );
+                          }
+                          return Text(message.body, style: TextStyle(color: fg));
+                        },
+                      ),
+                    ],
                     const SizedBox(height: 2),
                     Row(
                       mainAxisSize: MainAxisSize.min,
@@ -1841,21 +2160,36 @@ class _MessageBubble extends StatelessWidget {
                         if (message.edited)
                           Text(' · edited',
                               style: TextStyle(fontSize: 10, color: fg.withValues(alpha: 0.7))),
+                        if (message.bearer != null &&
+                            message.bearer != TalkBearer.cloud.wire)
+                          Text(
+                            ' · ${TalkBearer.fromWire(message.bearer).label}',
+                            style: TextStyle(fontSize: 10, color: fg.withValues(alpha: 0.7)),
+                          ),
                         if (isMine) ...[
                           const SizedBox(width: 4),
-                          Icon(
-                            message.pending
-                                ? Icons.schedule
-                                : message.readAt != null ||
-                                        message.deliveredAt != null
-                                    ? Icons.done_all
-                                    : Icons.done,
-                            size: 12,
-                            color: message.pending
-                                ? fg.withValues(alpha: 0.7)
-                                : message.readAt != null
-                                    ? Colors.lightBlueAccent
-                                    : fg.withValues(alpha: 0.7),
+                          Builder(
+                            builder: (context) {
+                              final delivery = MessageDeliveryState.resolve(
+                                isMine: isMine,
+                                pending: message.pending,
+                                bearerWire: message.bearer,
+                                deliveredAt: message.deliveredAt,
+                                readAt: message.readAt,
+                                foreground: fg,
+                              );
+                              if (delivery.semanticLabel.isEmpty) {
+                                return const SizedBox.shrink();
+                              }
+                              return Semantics(
+                                label: delivery.semanticLabel,
+                                child: Icon(
+                                  delivery.icon,
+                                  size: 12,
+                                  color: delivery.tint,
+                                ),
+                              );
+                            },
                           ),
                         ],
                       ],

@@ -51,3 +51,4 @@ app.*.map.json
 .env.bak
 android/build/
 builds/
+.device-env

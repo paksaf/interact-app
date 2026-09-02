@@ -215,6 +215,7 @@ class Message {
     this.pinnedAt,
     this.replyToId,
     this.pending = false,
+    this.bearer,
   });
 
   final String id;
@@ -238,8 +239,55 @@ class Message {
   final String? replyToId;
   /// True when queued in the local outbox (offline store-and-forward).
   final bool pending;
+  /// Which bearer delivered or queued this message (offline router).
+  final String? bearer;
 
   bool get isPinned => pinnedAt != null;
+
+  Message copyWith({
+    String? id,
+    String? threadId,
+    String? senderId,
+    String? senderName,
+    MessageKind? kind,
+    String? body,
+    DateTime? sentAt,
+    String? mediaUrl,
+    int? mediaDurationSec,
+    String? transcript,
+    DateTime? deliveredAt,
+    DateTime? readAt,
+    bool? isMine,
+    List<MessageReaction>? reactions,
+    bool? edited,
+    bool? deleted,
+    DateTime? pinnedAt,
+    String? replyToId,
+    bool? pending,
+    String? bearer,
+  }) =>
+      Message(
+        id: id ?? this.id,
+        threadId: threadId ?? this.threadId,
+        senderId: senderId ?? this.senderId,
+        senderName: senderName ?? this.senderName,
+        kind: kind ?? this.kind,
+        body: body ?? this.body,
+        sentAt: sentAt ?? this.sentAt,
+        mediaUrl: mediaUrl ?? this.mediaUrl,
+        mediaDurationSec: mediaDurationSec ?? this.mediaDurationSec,
+        transcript: transcript ?? this.transcript,
+        deliveredAt: deliveredAt ?? this.deliveredAt,
+        readAt: readAt ?? this.readAt,
+        isMine: isMine ?? this.isMine,
+        reactions: reactions ?? this.reactions,
+        edited: edited ?? this.edited,
+        deleted: deleted ?? this.deleted,
+        pinnedAt: pinnedAt ?? this.pinnedAt,
+        replyToId: replyToId ?? this.replyToId,
+        pending: pending ?? this.pending,
+        bearer: bearer ?? this.bearer,
+      );
 
   factory Message.fromJson(Map<String, dynamic> j, {String? myId}) {
     final senderId = (j['senderId'] as String?) ?? '';

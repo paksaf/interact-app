@@ -52,6 +52,11 @@ class _ContactsTabState extends ConsumerState<ContactsTab> {
         showBrandGlyph: true,
         actions: [
           IconButton(
+            icon: const Icon(Icons.dynamic_feed_outlined),
+            tooltip: 'Friends & Family',
+            onPressed: () => context.push('/social-panel'),
+          ),
+          IconButton(
             icon: const Icon(Icons.person_add_outlined),
             tooltip: 'Invite from contacts',
             onPressed: () => context.push('/device-contacts'),

@@ -8,6 +8,7 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
@@ -26,6 +27,9 @@ class OfflineLanScreen extends ConsumerStatefulWidget {
 
 class _OfflineLanScreenState extends ConsumerState<OfflineLanScreen> {
   final _textCtrl = TextEditingController();
+  final _manualHostCtrl = TextEditingController();
+  final _manualPortCtrl = TextEditingController();
+  final _manualNameCtrl = TextEditingController();
   final List<({String? fromName, String body, bool isMine})> _log = [];
   _LanMode _mode = _LanMode.sameWifi;
   P2pDarwinRole _darwinRole = P2pDarwinRole.browser;
@@ -42,6 +46,7 @@ class _OfflineLanScreenState extends ConsumerState<OfflineLanScreen> {
   String? _error;
   String _peerId = '';
   String _displayName = '';
+  String? _localLanHint;
 
   @override
   void initState() {
@@ -92,6 +97,9 @@ class _OfflineLanScreenState extends ConsumerState<OfflineLanScreen> {
         });
         setState(() {
           _lanPeers = lan.peers;
+          _localLanHint = lan.localLanIp != null && lan.localPort != null
+              ? '${lan.localLanIp}:${lan.localPort}'
+              : null;
           _starting = false;
         });
       } else {
@@ -130,6 +138,9 @@ class _OfflineLanScreenState extends ConsumerState<OfflineLanScreen> {
     _peerSub?.cancel();
     _msgSub?.cancel();
     _textCtrl.dispose();
+    _manualHostCtrl.dispose();
+    _manualPortCtrl.dispose();
+    _manualNameCtrl.dispose();
     ref.read(lanServiceProvider).stop();
     ref.read(p2pServiceProvider).stop();
     unawaited(WakelockPlus.disable());
@@ -147,6 +158,46 @@ class _OfflineLanScreenState extends ConsumerState<OfflineLanScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Direct connect failed: $e')),
+      );
+    }
+  }
+
+  Future<void> _copyLocalHint() async {
+    final hint = _localLanHint;
+    if (hint == null) return;
+    await Clipboard.setData(ClipboardData(text: hint));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Copied $hint')),
+    );
+  }
+
+  void _addManualPeer() {
+    final host = _manualHostCtrl.text.trim();
+    final port = int.tryParse(_manualPortCtrl.text.trim()) ?? 0;
+    final name = _manualNameCtrl.text.trim();
+    if (host.isEmpty || port <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter the other phone’s IP and port')),
+      );
+      return;
+    }
+    try {
+      final peer = ref.read(lanServiceProvider).addManualPeer(
+            host: host,
+            port: port,
+            displayName: name.isEmpty ? null : name,
+          );
+      setState(() {
+        _lanPeers = ref.read(lanServiceProvider).peers;
+        _selectedLan = peer;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Added ${peer.displayName} — you can send now')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not add peer: $e')),
       );
     }
   }
@@ -267,7 +318,9 @@ class _OfflineLanScreenState extends ConsumerState<OfflineLanScreen> {
                 subtitle: Text(
                   _mode == _LanMode.sameWifi
                       ? (_lanPeers.isEmpty
-                          ? 'Broadcasting… open Offline LAN on another phone'
+                          ? (_localLanHint != null
+                              ? 'Broadcasting on $_localLanHint — open Offline LAN on another phone'
+                              : 'Broadcasting… open Offline LAN on another phone')
                           : '${_lanPeers.length} peer(s) — tap one, then send')
                       : (_p2pConnected
                           ? 'Connected to ${_selectedP2p?.displayName ?? "peer"}'
@@ -275,8 +328,80 @@ class _OfflineLanScreenState extends ConsumerState<OfflineLanScreen> {
                               ? 'Searching… same OS only (Android↔Android or iOS↔iOS)'
                               : 'Tap a peer to connect, then send')),
                 ),
+                trailing: _mode == _LanMode.sameWifi && _localLanHint != null
+                    ? IconButton(
+                        tooltip: 'Copy IP:port',
+                        onPressed: _copyLocalHint,
+                        icon: const Icon(Icons.copy, size: 20),
+                      )
+                    : null,
               ),
             ),
+            if (_mode == _LanMode.sameWifi)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+                child: ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  title: const Text(
+                    'Join by IP (mDNS blocked)',
+                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                  ),
+                  subtitle: Text(
+                    isDarwin
+                        ? 'iPhone: Settings → INTERACT → Local Network ON'
+                        : 'Use when discovery stays empty',
+                    style: TextStyle(color: cs.onSurfaceVariant, fontSize: 11),
+                  ),
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          flex: 3,
+                          child: TextField(
+                            controller: _manualHostCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'Peer IP',
+                              hintText: '192.168.100.84',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                            keyboardType: TextInputType.number,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: TextField(
+                            controller: _manualPortCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'Port',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                            keyboardType: TextInputType.number,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _manualNameCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Label (optional)',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: FilledButton.tonal(
+                        onPressed: _addManualPeer,
+                        child: const Text('Add peer'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             SizedBox(
               height: 88,
               child: _mode == _LanMode.sameWifi
@@ -364,7 +489,19 @@ class _OfflineLanScreenState extends ConsumerState<OfflineLanScreen> {
 
   Widget _lanPeerChips() {
     if (_lanPeers.isEmpty) {
-      return const Center(child: Text('No peers yet'));
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Text(
+            'No peers yet — both phones on Offline LAN, or use Join by IP',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              fontSize: 12,
+            ),
+          ),
+        ),
+      );
     }
     return ListView.builder(
       scrollDirection: Axis.horizontal,

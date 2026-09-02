@@ -1,19 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0
 //
-// Nearby BLE mesh text via sahl_mesh (donor). Short UTF-8 lines ride on
-// MeshMessageKind.hello payloads prefixed with "talk:" so we don't break
-// the SAHL kind enum wire layout.
+// Nearby BLE mesh — thin UI over app-wide [BleMeshTransportService] (P3 Wave 1).
 import 'dart:async';
-import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:sahl_mesh/sahl_mesh.dart';
-import 'package:sahl_mesh/sahl_mesh_ble.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import '../../core/offline/mesh_identity_card.dart';
+import '../../services/ble_mesh_transport_service.dart';
+import '../../services/field_probe_service.dart';
 import '../../services/mesh_cloud_bridge.dart';
 import '../../services/mesh_foreground_service.dart';
 import '../../widgets/branded_app_bar.dart';
@@ -26,11 +24,11 @@ class NearbyMeshScreen extends ConsumerStatefulWidget {
 
 class _NearbyMeshScreenState extends ConsumerState<NearbyMeshScreen> {
   final _textCtrl = TextEditingController();
-  final List<String> _log = [];
-  MeshNode? _node;
+  final _log = <String>[];
   StreamSubscription? _sub;
   bool _starting = true;
   String? _error;
+  int? _lastLatencyMs;
 
   @override
   void initState() {
@@ -40,7 +38,6 @@ class _NearbyMeshScreenState extends ConsumerState<NearbyMeshScreen> {
 
   Future<void> _boot() async {
     try {
-      // Explicit runtime perms before sahl_mesh (field-test harden P0).
       await [
         Permission.bluetoothScan,
         Permission.bluetoothConnect,
@@ -50,27 +47,25 @@ class _NearbyMeshScreenState extends ConsumerState<NearbyMeshScreen> {
       await WakelockPlus.enable();
       await MeshForegroundService.instance.start();
 
-      final id = await MeshIdentity.generate();
-      final node = MeshNode(
-        transport: BleTransport(
-          config: const BleTransportConfig(throwOnPermissionDenied: true),
-        ),
-        identity: id,
-      );
-      await node.start();
-      _sub = node.messages.listen((msg) async {
-        if (msg.kind != MeshMessageKind.hello) return;
-        final raw = utf8.decode(msg.payload, allowMalformed: true);
-        if (!raw.startsWith('talk:')) return;
-        // Received over BLE mesh — rendered locally only, never re-sent as us.
-        final body = MeshCloudBridge.plainBody(raw) ?? raw.substring(5);
+      final transport = ref.read(bleMeshTransportServiceProvider);
+      await transport.start();
+      _sub = transport.inbound.listen((evt) async {
+        final plain = MeshCloudBridge.plainBody(evt.raw);
+        if (plain == null || plain.isEmpty) return;
+        final latency = await FieldProbeService.instance.recordRx(
+          bearer: 'ble',
+          detail: plain,
+        );
         if (!mounted) return;
-        setState(() => _log.add('← $body'));
+        setState(() {
+          _lastLatencyMs = latency;
+          final from = looksLikeMeshPubKeyHex(evt.from)
+              ? evt.from.substring(0, 8)
+              : evt.from;
+          _log.add('← $plain (${latency ?? '?'} ms, $from…)');
+        });
       });
-      setState(() {
-        _node = node;
-        _starting = false;
-      });
+      setState(() => _starting = false);
     } catch (e) {
       setState(() {
         _error = '$e';
@@ -80,17 +75,13 @@ class _NearbyMeshScreenState extends ConsumerState<NearbyMeshScreen> {
   }
 
   Future<void> _send() async {
-    final node = _node;
     final text = _textCtrl.text.trim();
-    if (node == null || text.isEmpty) return;
-    final bytes = utf8.encode('talk:$text');
-    final clipped = bytes.length > 180 ? bytes.sublist(0, 180) : bytes;
+    if (text.isEmpty) return;
     try {
-      await node.broadcast(MeshMessage(
-        kind: MeshMessageKind.hello,
-        from: node.identity.publicKey,
-        payload: Uint8List.fromList(clipped),
-      ));
+      final ok = await ref
+          .read(bleMeshTransportServiceProvider)
+          .sendForThread(kFieldBleMeshThreadId, text);
+      if (!ok) throw StateError('BLE mesh send failed');
       setState(() {
         _log.add('→ $text');
         _textCtrl.clear();
@@ -98,7 +89,7 @@ class _NearbyMeshScreenState extends ConsumerState<NearbyMeshScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Mesh send failed: $e')),
+        SnackBar(content: Text('$e')),
       );
     }
   }
@@ -106,9 +97,6 @@ class _NearbyMeshScreenState extends ConsumerState<NearbyMeshScreen> {
   @override
   void dispose() {
     _sub?.cancel();
-    _node?.stop();
-    unawaited(MeshForegroundService.instance.stop());
-    unawaited(WakelockPlus.disable());
     _textCtrl.dispose();
     super.dispose();
   }
@@ -116,7 +104,16 @@ class _NearbyMeshScreenState extends ConsumerState<NearbyMeshScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: const BrandedAppBar(title: 'Nearby mesh (BLE)'),
+      appBar: BrandedAppBar(
+        title: 'Nearby mesh (BLE)',
+        actions: [
+          IconButton(
+            tooltip: 'Link mesh identity',
+            onPressed: () => context.push('/mesh-identity'),
+            icon: const Icon(Icons.qr_code_2),
+          ),
+        ],
+      ),
       body: _starting
           ? const Center(child: CircularProgressIndicator())
           : _error != null
@@ -132,13 +129,13 @@ class _NearbyMeshScreenState extends ConsumerState<NearbyMeshScreen> {
                 )
               : Column(
                   children: [
-                    const ListTile(
-                      leading: Icon(Icons.bluetooth_searching),
-                      title: Text('sahl_mesh gossip'),
+                    ListTile(
+                      leading: const Icon(Icons.bluetooth_searching),
+                      title: const Text('sahl_mesh gossip'),
                       subtitle: Text(
-                        'Short texts hop phone-to-phone over BLE. '
-                        'No internet. Keep this screen open (FG keep-alive). '
-                        'Field: RF-BLE-1 @1m, RF-BLE-2 @50m, RF-BLE-3 3 phones.',
+                        'Same transport as Chats offline router. '
+                        'Field: RF-BLE-1 @1m, RF-BLE-2 @50m, RF-BLE-3 3 phones.'
+                        '${_lastLatencyMs != null ? '\nLast RX: ${_lastLatencyMs}ms' : ''}',
                       ),
                     ),
                     const Divider(height: 1),
@@ -162,10 +159,9 @@ class _NearbyMeshScreenState extends ConsumerState<NearbyMeshScreen> {
                                 controller: _textCtrl,
                                 maxLength: 160,
                                 decoration: const InputDecoration(
-                                  hintText: 'Broadcast mesh text',
+                                  hintText: 'Short text (talk:1|thread|… envelope)',
                                   border: OutlineInputBorder(),
                                   isDense: true,
-                                  counterText: '',
                                 ),
                                 onSubmitted: (_) => _send(),
                               ),
@@ -173,7 +169,7 @@ class _NearbyMeshScreenState extends ConsumerState<NearbyMeshScreen> {
                             const SizedBox(width: 8),
                             IconButton.filled(
                               onPressed: _send,
-                              icon: const Icon(Icons.campaign_outlined),
+                              icon: const Icon(Icons.send),
                             ),
                           ],
                         ),

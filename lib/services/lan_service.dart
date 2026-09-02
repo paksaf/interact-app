@@ -14,9 +14,12 @@ import 'dart:io';
 import 'package:bonsoir/bonsoir.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/net/local_lan_ip.dart';
+import 'field_probe_service.dart';
 import 'mesh_cloud_bridge.dart';
 
 const _kServiceType = '_interact-lan._tcp';
+const _kAppTag = 'interact-lan';
 
 final lanServiceProvider = Provider<LanService>((ref) => LanService());
 
@@ -63,12 +66,15 @@ class LanService {
   final Map<String, LanPeer> _peers = {};
   String _peerId = '';
   String _displayName = '';
+  String? _localLanIp;
 
   Stream<List<LanPeer>> get peersStream => _peersController.stream;
   Stream<LanTextMessage> get messages => _messagesController.stream;
   List<LanPeer> get peers => _peers.values.toList();
 
   bool get isRunning => _server != null;
+  int? get localPort => _server?.port;
+  String? get localLanIp => _localLanIp;
 
   /// Start TCP listener + mDNS advertise/discover. Idempotent.
   Future<void> start({
@@ -82,6 +88,7 @@ class LanService {
       _server = await ServerSocket.bind(InternetAddress.anyIPv4, 0);
       _server!.listen(_onInboundSocket);
     }
+    _localLanIp = await primaryLanIPv4();
     final port = _server!.port;
 
     if (_broadcast == null) {
@@ -92,7 +99,8 @@ class LanService {
         attributes: {
           'peerId': peerId,
           'displayName': displayName,
-          'app': 'interact',
+          'app': _kAppTag,
+          if (_localLanIp != null) 'lanIp': _localLanIp!,
         },
       );
       _broadcast = BonsoirBroadcast(service: service);
@@ -115,20 +123,47 @@ class LanService {
     _broadcast = null;
     _discovery = null;
     _server = null;
+    _localLanIp = null;
     _peers.clear();
     _peersController.add(const []);
+  }
+
+  /// Register a peer when mDNS discovery is blocked (AP isolation, iOS Local
+  /// Network off, etc.). [host]:[port] must match the address shown on the
+  /// other phone's Offline LAN banner.
+  LanPeer addManualPeer({
+    required String host,
+    required int port,
+    String? displayName,
+    String? peerId,
+  }) {
+    final trimmedHost = host.trim();
+    if (trimmedHost.isEmpty || port <= 0) {
+      throw ArgumentError('host and port are required');
+    }
+    final id = peerId ?? 'manual-$trimmedHost-$port';
+    final peer = LanPeer(
+      peerId: id,
+      displayName: displayName ?? 'Peer $trimmedHost',
+      host: trimmedHost,
+      port: port,
+    );
+    _upsertPeer(peer);
+    return peer;
   }
 
   /// Send a short UTF-8 text line to [peer] over TCP.
   Future<void> sendText(LanPeer peer, String text) async {
     final body = text.trim();
     if (body.isEmpty) return;
+    final listenPort = _server?.port;
     final payload = jsonEncode({
       't': 'chat',
       'from': _peerId,
       'name': _displayName,
       'body': body,
       'at': DateTime.now().toIso8601String(),
+      if (listenPort != null) 'listenPort': listenPort,
     });
     Socket? sock;
     try {
@@ -149,6 +184,7 @@ class LanService {
   }
 
   void _onInboundSocket(Socket sock) {
+    final remoteHost = sock.remoteAddress.address;
     utf8.decoder.bind(sock).transform(const LineSplitter()).listen((line) {
       if (line.trim().isEmpty) return;
       try {
@@ -156,6 +192,16 @@ class LanService {
         if (m['t'] != 'chat') return;
         final from = (m['from'] as String?) ?? '';
         if (from.isEmpty || from == _peerId) return;
+        final name = (m['name'] as String?) ?? from;
+        final listenPort = (m['listenPort'] as num?)?.toInt();
+        if (listenPort != null && listenPort > 0) {
+          _upsertPeer(LanPeer(
+            peerId: from,
+            displayName: name,
+            host: remoteHost,
+            port: listenPort,
+          ));
+        }
         final body = (m['body'] as String?) ?? '';
         // Render locally, sender-attributed, with any talk: envelope
         // stripped. We do NOT re-inject to cloud as the local user — that
@@ -163,12 +209,27 @@ class LanService {
         // header + docs/OFFLINE_BEARERS_AUDIT_2026-09-01.md §3).
         _messagesController.add(LanTextMessage(
           fromPeerId: from,
-          fromName: (m['name'] as String?) ?? from,
+          fromName: name,
           body: MeshCloudBridge.plainBody(body) ?? body,
           at: DateTime.tryParse(m['at'] as String? ?? '') ?? DateTime.now(),
         ));
+        unawaited(FieldProbeService.instance.recordRx(
+          bearer: 'lan',
+          detail: MeshCloudBridge.plainBody(body) ?? body,
+        ));
       } catch (_) {/* ignore malformed */}
     });
+  }
+
+  void _upsertPeer(LanPeer peer) {
+    _peers.removeWhere(
+      (_, p) =>
+          p.peerId.startsWith('manual-') &&
+          p.host == peer.host &&
+          p.port == peer.port,
+    );
+    _peers[peer.peerId] = peer;
+    _peersController.add(_peers.values.toList());
   }
 
   void _onDiscoveryEvent(BonsoirDiscoveryEvent event) {
@@ -179,17 +240,20 @@ class LanService {
     } else if (event.type ==
         BonsoirDiscoveryEventType.discoveryServiceResolved) {
       final attrs = s.attributes;
+      if (attrs['app'] != _kAppTag && attrs['app'] != 'interact') return;
       final peerId = attrs['peerId'];
       if (peerId == null || peerId.isEmpty || peerId == _peerId) return;
-      final host = (s as ResolvedBonsoirService).host ?? '';
+      // Our own broadcast echoes through discovery on most platforms.
+      if (s.port == _server?.port) return;
+      final resolved = (s as ResolvedBonsoirService).host ?? '';
+      final host = resolved.isNotEmpty ? resolved : (attrs['lanIp'] ?? '');
       if (host.isEmpty) return;
-      _peers[peerId] = LanPeer(
+      _upsertPeer(LanPeer(
         peerId: peerId,
         displayName: attrs['displayName'] ?? peerId,
         host: host,
         port: s.port,
-      );
-      _peersController.add(_peers.values.toList());
+      ));
     } else if (event.type == BonsoirDiscoveryEventType.discoveryServiceLost) {
       final attrs = s.attributes;
       final peerId = attrs['peerId'];

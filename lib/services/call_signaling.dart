@@ -122,31 +122,34 @@ class CallSignaling {
     // Don't stack a second ring while one is showing.
     if (incoming.value != null) return;
     try {
-      final res = await http
-          .get(Uri.parse('$_kBase/api/v1/talk/calls/incoming'), headers: await _headers())
-          .timeout(const Duration(seconds: 6));
-      if (res.statusCode != 200) return;
-      final body = jsonDecode(res.body) as Map<String, dynamic>;
-      final data = (body['data'] ?? body) as Map<String, dynamic>;
-      final inv = data['invite'];
-      if (inv is Map<String, dynamic>) {
-        final call = IncomingCall.fromJson(inv);
-        if (_handled.contains(call.id)) return;
-        _handled.add(call.id);
+      await ApiBase.runWithFailover(() async {
+        final res = await http
+            .get(Uri.parse('$_kBase/api/v1/talk/calls/incoming'),
+                headers: await _headers())
+            .timeout(const Duration(seconds: 6));
+        if (res.statusCode != 200) return;
+        final body = jsonDecode(res.body) as Map<String, dynamic>;
+        final data = (body['data'] ?? body) as Map<String, dynamic>;
+        final inv = data['invite'];
+        if (inv is Map<String, dynamic>) {
+          final call = IncomingCall.fromJson(inv);
+          if (_handled.contains(call.id)) return;
+          _handled.add(call.id);
 
-        // Blocked peer → swallow the invite entirely (no ring, no banner,
-        // no respond — the caller's side times out as a normal no-answer).
-        if (isBlockedThread(call.threadId)) return;
+          // Blocked peer → swallow the invite entirely (no ring, no banner,
+          // no respond — the caller's side times out as a normal no-answer).
+          if (isBlockedThread(call.threadId)) return;
 
-        if (inCall.value) {
-          // Already in a live call — tell the caller we're busy and banner locally.
-          missedWhileBusy.value = call;
-          unawaited(respond(call.id, 'busy'));
-          return;
+          if (inCall.value) {
+            // Already in a live call — tell the caller we're busy and banner locally.
+            missedWhileBusy.value = call;
+            unawaited(respond(call.id, 'busy'));
+            return;
+          }
+
+          incoming.value = call;
         }
-
-        incoming.value = call;
-      }
+      });
     } catch (_) {/* best-effort */}
   }
 
@@ -156,17 +159,19 @@ class CallSignaling {
   /// answered. Null when the ring couldn't be created (best-effort).
   Future<String?> ring(String threadId, String mode) async {
     try {
-      final res = await http
-          .post(
-            Uri.parse('$_kBase/api/v1/talk/calls/ring'),
-            headers: await _headers(),
-            body: jsonEncode({'threadId': threadId, 'mode': mode}),
-          )
-          .timeout(const Duration(seconds: 6));
-      if (res.statusCode >= 400) return null;
-      final body = jsonDecode(res.body) as Map<String, dynamic>;
-      final data = (body['data'] ?? body) as Map<String, dynamic>;
-      return data['inviteId'] as String?;
+      return await ApiBase.runWithFailover(() async {
+        final res = await http
+            .post(
+              Uri.parse('$_kBase/api/v1/talk/calls/ring'),
+              headers: await _headers(),
+              body: jsonEncode({'threadId': threadId, 'mode': mode}),
+            )
+            .timeout(const Duration(seconds: 6));
+        if (res.statusCode >= 400) return null;
+        final body = jsonDecode(res.body) as Map<String, dynamic>;
+        final data = (body['data'] ?? body) as Map<String, dynamic>;
+        return data['inviteId'] as String?;
+      });
     } catch (_) {
       return null; // ring is best-effort; the call still proceeds
     }

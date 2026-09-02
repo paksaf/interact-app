@@ -250,45 +250,47 @@ class TalkApi {
     String? roomId,
     String mode = 'video',
   }) async {
-    final h = await _headers();
-    // The backend requires ONE anchor of threadId/animalId/contractId/roomId/
-    // eventId. An ad-hoc "New meeting" (from the Calls tab) has no thread, so
-    // we generate a room code and send it as `roomId` — that satisfies the
-    // validator AND doubles as the shareable join code others enter. Without
-    // this the token mint 400s ("one of … required") and the room never
-    // connects, leaving mic/camera/controls dead on a black screen (fixed
-    // 2026-07-21).
-    final anchorRoomId =
-        threadId == null ? (roomId ?? generateRoomCode()) : null;
-    final payload = <String, dynamic>{
-      if (threadId != null) 'threadId': threadId,
-      // Ad-hoc meeting → `talkRoom` (any signed-in user may host/join; the
-      // code is the authorization). NOT `roomId`, which is the admin-only
-      // free-form escape hatch and 403s for normal users (fixed 2026-07-21).
-      if (anchorRoomId != null) 'talkRoom': anchorRoomId,
-      'mode': mode,
-    };
-    // Preferred endpoint (after backend extension)
-    var res = await http.post(
-      Uri.parse('$_kBase/api/v1/talk/rooms'),
-      headers: h,
-      body: jsonEncode(payload),
-    );
-    // Phase 1 fallback — the existing meetings/token endpoint with the same
-    // anchor payload.
-    if (res.statusCode == 404) {
-      res = await http.post(
-        Uri.parse('$_kBase/api/v1/meetings/token'),
+    return ApiBase.runWithFailover(() async {
+      final h = await _headers();
+      // The backend requires ONE anchor of threadId/animalId/contractId/roomId/
+      // eventId. An ad-hoc "New meeting" (from the Calls tab) has no thread, so
+      // we generate a room code and send it as `roomId` — that satisfies the
+      // validator AND doubles as the shareable join code others enter. Without
+      // this the token mint 400s ("one of … required") and the room never
+      // connects, leaving mic/camera/controls dead on a black screen (fixed
+      // 2026-07-21).
+      final anchorRoomId =
+          threadId == null ? (roomId ?? generateRoomCode()) : null;
+      final payload = <String, dynamic>{
+        if (threadId != null) 'threadId': threadId,
+        // Ad-hoc meeting → `talkRoom` (any signed-in user may host/join; the
+        // code is the authorization). NOT `roomId`, which is the admin-only
+        // free-form escape hatch and 403s for normal users (fixed 2026-07-21).
+        if (anchorRoomId != null) 'talkRoom': anchorRoomId,
+        'mode': mode,
+      };
+      // Preferred endpoint (after backend extension)
+      var res = await http.post(
+        Uri.parse('$_kBase/api/v1/talk/rooms'),
         headers: h,
         body: jsonEncode(payload),
       );
-    }
-    if (res.statusCode >= 400) {
-      throw Exception('createRoom failed: ${res.statusCode} ${res.body}');
-    }
-    return TalkRoomToken.fromJson(
-      jsonDecode(res.body) as Map<String, dynamic>,
-    );
+      // Phase 1 fallback — the existing meetings/token endpoint with the same
+      // anchor payload.
+      if (res.statusCode == 404) {
+        res = await http.post(
+          Uri.parse('$_kBase/api/v1/meetings/token'),
+          headers: h,
+          body: jsonEncode(payload),
+        );
+      }
+      if (res.statusCode >= 400) {
+        throw Exception('createRoom failed: ${res.statusCode} ${res.body}');
+      }
+      return TalkRoomToken.fromJson(
+        jsonDecode(res.body) as Map<String, dynamic>,
+      );
+    });
   }
 
   /// 6-char human-shareable room code — uppercase A–Z + 2–9, minus visually
@@ -303,25 +305,27 @@ class TalkApi {
   /// Join an existing room by its 6-char code. Server validates the
   /// code is current + non-expired.
   Future<TalkRoomToken> joinRoom(String code) async {
-    final h = await _headers();
-    var res = await http.post(
-      Uri.parse('$_kBase/api/v1/talk/rooms/$code/join'),
-      headers: h,
-    );
-    if (res.statusCode == 404) {
-      // Fallback — mint a token for the ad-hoc Talk room keyed by this code.
-      // `talkRoom` lets any signed-in user join (the code is the auth); the
-      // old `{general:true}` payload was rejected by the validator.
-      res = await http.post(
-        Uri.parse('$_kBase/api/v1/meetings/token'),
+    return ApiBase.runWithFailover(() async {
+      final h = await _headers();
+      var res = await http.post(
+        Uri.parse('$_kBase/api/v1/talk/rooms/$code/join'),
         headers: h,
-        body: jsonEncode({'talkRoom': code}),
       );
-    }
-    if (res.statusCode >= 400) {
-      throw Exception('joinRoom failed: ${res.statusCode} ${res.body}');
-    }
-    return TalkRoomToken.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+      if (res.statusCode == 404) {
+        // Fallback — mint a token for the ad-hoc Talk room keyed by this code.
+        // `talkRoom` lets any signed-in user join (the code is the auth); the
+        // old `{general:true}` payload was rejected by the validator.
+        res = await http.post(
+          Uri.parse('$_kBase/api/v1/meetings/token'),
+          headers: h,
+          body: jsonEncode({'talkRoom': code}),
+        );
+      }
+      if (res.statusCode >= 400) {
+        throw Exception('joinRoom failed: ${res.statusCode} ${res.body}');
+      }
+      return TalkRoomToken.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+    });
   }
 
   /// Recent contacts — server returns the last N peers the signed-in

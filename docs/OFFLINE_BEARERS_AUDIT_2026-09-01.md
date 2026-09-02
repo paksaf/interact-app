@@ -17,7 +17,7 @@ This is about the layer **above** the transports, which does not exist yet.
 | BLE gossip | `sahl_mesh` (adv/scan, CBOR, Ed25519, TTL, Bloom, chunked) | 2142 + 7 test files | **Yes** — chunking implemented, RSSI → `sahl_radar` | `nearby_mesh_screen` |
 | Wi-Fi LAN text | `lan_service` (Bonsoir mDNS + TCP newline JSON) | 204 | **Yes** | `offline_lan_screen` |
 | Wi-Fi Direct / MPC | `p2p_service` (`nearby_service`) | 197 | **Yes**, same-OS only | `offline_lan_screen` (Direct mode) |
-| LAN walkie voice | `lan_walkie_service` (in-app WS relay + WebRTC) | 442 | **New, untested** | `lan_walkie_screen` |
+| LAN walkie voice | `lan_walkie_service` (in-app WS relay + WebRTC) | 442 | **Yes** — manual IP join + host IP display (6056); field test pending | `lan_walkie_screen` |
 | LoRa bridge | `lora_bridge_service` + `firmware/lora_ble_bridge/` | 276 + firmware | **Yes**, needs hardware | `lora_bridge_screen` |
 | Meshtastic | `meshtastic_bridge_service` (official GATT) | 198 | **RX only** — `MeshPacket` TX not implemented | — |
 | BLE device scan | `nearby_ble_devices_service` | 151 | **Yes** | `iot/nearby_ble_devices_screen` |

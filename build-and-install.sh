@@ -9,20 +9,28 @@
 #   bash build-and-install.sh phoneb      # build + install armeabi-v7a on USB device
 #                                         #   (32-bit Redmi / Phone B — NEVER give it arm64)
 #   bash build-and-install.sh tv          # build + install on Bravia TV (LAN)
+#   bash build-and-install.sh car         # build + install on car HU (WiFi adb, v7a)
+#   bash build-and-install.sh car-wifi    # build v7a APK + HTTP serve :8766 for car browser
 #   bash build-and-install.sh all         # build + install on A23 + TV
-#   bash build-and-install.sh wifi        # build a TRUE fat universal apk + serve Wi-Fi
+#   bash build-and-install.sh wifi        # build a TRUE fat universal apk + serve Wi-Fi :8765
 #                                         #   (must include armeabi-v7a — see gotcha #67)
 #
-# 2026-05-21 — adds Private AI toggle + ✨ AI menu wiring. Cloud AI
-# tier routes through interactpak.com/api/zeka/ai; on-device tier
-# stays stubbed pending Phase 3 llama_cpp_dart binding.
+# Device IDs: copy .device-env.example → .device-env (local overrides).
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# Devices (per memory: dev_lan_setup.md)
-A23_SERIAL="R68T304FX1F"
-TV_HOST="192.168.100.4:5555"
+if [[ -f .device-env ]]; then
+  # shellcheck disable=SC1091
+  source .device-env
+fi
+
+# Devices (see docs/DEV_LAN_SETUP.md)
+A23_SERIAL="${A23_SERIAL:-R68T304FX1F}"
+TV_HOST="${TV_HOST:-192.168.100.4:5555}"
+CAR_HOST="${CAR_HOST:-}"
+WIFI_PORT_PHONE="${WIFI_PORT_PHONE:-8765}"
+WIFI_PORT_CAR="${WIFI_PORT_CAR:-8766}"
 
 target="${1:-build}"
 
@@ -61,9 +69,9 @@ if [[ "$target" == "wifi" ]]; then
 
   LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}')"
   echo ""
-  echo "==> [4/4] Serving over Wi-Fi on :8765"
+  echo "==> [4/4] Serving over Wi-Fi on :${WIFI_PORT_PHONE}"
   echo "    On the phone (same Wi-Fi) open:"
-  echo "      http://${LAN_IP:-<your-mac-ip>}:8765/InteractTalk-${VER}.apk"
+  echo "      http://${LAN_IP:-<your-mac-ip>}:${WIFI_PORT_PHONE}/InteractTalk-${VER}.apk"
   echo "    Wait for 100% download (~150–180 MB). Partial → splash then close."
   echo "    (Ctrl+C to stop the server when the download completes.)"
   cd "$APK_DIR"
@@ -73,7 +81,38 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 class H(SimpleHTTPRequestHandler):
     extensions_map = {**getattr(SimpleHTTPRequestHandler, 'extensions_map', {}),
                       '.apk': 'application/vnd.android.package-archive'}
-ThreadingHTTPServer(('0.0.0.0', 8765), H).serve_forever()
+ThreadingHTTPServer(('0.0.0.0', ${WIFI_PORT_PHONE}), H).serve_forever()
+"
+fi
+
+# ── Car HU Wi-Fi sideload — v7a-only APK on :8766 (lighter for 2 GB HU) ─────
+if [[ "$target" == "car-wifi" ]]; then
+  echo ""
+  echo "==> [3/4] flutter build apk --release --target-platform android-arm"
+  flutter build apk --release --target-platform android-arm
+  V7_ONLY="$APK_DIR/app-release.apk"
+  [[ -f "$V7_ONLY" ]] || { echo "❌ v7a APK not found at $V7_ONLY"; exit 1; }
+  CAR_APK="$APK_DIR/InteractTalk-car-v7a-${VER}.apk"
+  cp "$V7_ONLY" "$CAR_APK"
+  mkdir -p "$HOME/dev/INTERACT/_car-hu-install"
+  cp "$CAR_APK" "$HOME/dev/INTERACT/_car-hu-install/"
+  echo "✅ car v7a APK: $CAR_APK ($(du -h "$CAR_APK" | cut -f1))"
+  LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}')"
+  echo ""
+  echo "==> [4/4] Serving car APK over Wi-Fi on :${WIFI_PORT_CAR}"
+  echo "    On the head-unit browser (same Wi-Fi) open:"
+  echo "      http://${LAN_IP:-<your-mac-ip>}:${WIFI_PORT_CAR}/$(basename "$CAR_APK")"
+  echo "    Enable Install unknown apps for the browser. Prefer adb once CAR_HOST is set."
+  cd "$APK_DIR"
+  ln -sf "$(basename "$CAR_APK")" "InteractTalk-car-latest.apk" 2>/dev/null || cp "$CAR_APK" InteractTalk-car-latest.apk
+  exec python3 -c "
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+import os
+os.chdir('${APK_DIR}')
+class H(SimpleHTTPRequestHandler):
+    extensions_map = {**getattr(SimpleHTTPRequestHandler, 'extensions_map', {}),
+                      '.apk': 'application/vnd.android.package-archive'}
+ThreadingHTTPServer(('0.0.0.0', ${WIFI_PORT_CAR}), H).serve_forever()
 "
 fi
 
@@ -139,6 +178,19 @@ case "$target" in
     adb connect "$TV_HOST" || true
     adb -s "$TV_HOST" install -r "$ARMV7"
     ;;
+  car|headunit|hu)
+    echo ""
+    if [[ -z "$CAR_HOST" ]]; then
+      echo "❌ CAR_HOST not set. Copy .device-env.example → .device-env and set CAR_HOST=<ip>:5555"
+      echo "   Or use: bash build-and-install.sh car-wifi"
+      exit 1
+    fi
+    echo "==> [4/4] adb install on car head unit ($CAR_HOST) — armeabi-v7a"
+    adb connect "$CAR_HOST" || true
+    ABI="$(adb -s "$CAR_HOST" shell getprop ro.product.cpu.abi 2>/dev/null | tr -d '\r' || true)"
+    echo "    abi=$ABI"
+    adb -s "$CAR_HOST" install -r "$ARMV7"
+    ;;
   all)
     echo ""
     echo "==> [4a/4] adb install on A23"
@@ -149,7 +201,7 @@ case "$target" in
     adb -s "$TV_HOST" install -r "$ARMV7"
     ;;
   *)
-    echo "❌ Unknown target '$target' — use: build | a23 | phoneb | tv | all | wifi"
+    echo "❌ Unknown target '$target' — use: build | a23 | phoneb | tv | car | car-wifi | wifi | all"
     exit 1
     ;;
 esac

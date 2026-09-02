@@ -8,6 +8,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/chat.dart';
+import '../../services/ai_contact_service.dart';
+import '../../services/iot/iot_chat_bridge.dart';
 import '../../services/chat_api.dart';
 import 'chat_thread_screen.dart';
 
@@ -31,6 +33,12 @@ class _ChatThreadLoaderState extends ConsumerState<ChatThreadLoader> {
   Future<ChatThread> _load() async {
     final id = widget.threadId.trim();
     if (id.isEmpty) throw Exception('Missing chat id');
+    if (id == kAiThreadId) {
+      return ref.read(aiContactServiceProvider).syntheticThread();
+    }
+    if (id == kIotAlertsThreadId) {
+      return ref.read(iotChatBridgeProvider).syntheticThread();
+    }
 
     // Prefer the chats list (richer title/preview) when online.
     try {

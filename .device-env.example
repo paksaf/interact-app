@@ -1,0 +1,21 @@
+# Copy to .device-env and adjust for your LAN (gitignored).
+# Sourced by build-and-install.sh, build-and-install-ios.sh, deploy-devices.sh
+
+# Samsung A23 (USB arm64)
+A23_SERIAL=R68T304FX1F
+
+# iPad (USB — flutter install / Xcode)
+IPAD_UDID=00008112-000609C611F9401E
+
+# iPhone Paksaf (USB)
+IPHONE_UDID=00008101-001A3CE400E1401E
+
+# Sony Bravia TV (WiFi adb)
+TV_HOST=192.168.100.4:5555
+
+# Car head unit CMWFYX (WiFi adb — set after wireless debugging pairs)
+CAR_HOST=192.168.100.50:5555
+
+# HTTP sideload ports (car uses 8766 so phone wifi :8765 can run in parallel)
+WIFI_PORT_PHONE=8765
+WIFI_PORT_CAR=8766

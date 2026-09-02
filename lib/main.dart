@@ -14,6 +14,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 
 import 'core/l10n/locale_prefs.dart';
 import 'l10n/app_localizations.dart';
@@ -43,6 +44,9 @@ import 'services/talk_flags.dart';
 import 'screens/meeting/townhall_entry_screen.dart';
 import 'screens/meeting/live_room_screen.dart';
 import 'services/live_api.dart';
+import 'utils/shared_location_launcher.dart';
+import 'utils/shared_location_pin.dart';
+import 'widgets/chat/location_pin_bubble.dart';
 import 'screens/shell/app_shell.dart';
 import 'screens/tabs/calls_tab.dart';
 import 'screens/tabs/chats_tab.dart';
@@ -51,18 +55,27 @@ import 'screens/tabs/me_tab.dart';
 import 'screens/iot/nearby_ble_devices_screen.dart';
 import 'screens/lan/offline_lan_screen.dart';
 import 'screens/lan/lan_walkie_screen.dart';
+import 'screens/lan/ble_walkie_screen.dart';
 import 'screens/offline/offline_hub_screen.dart';
+import 'screens/location/location_trace_screen.dart';
+import 'screens/social/find_friends_screen.dart';
+import 'screens/social/social_panel_screen.dart';
 import 'screens/lora/lora_bridge_screen.dart';
+import 'screens/iot/iot_comms_screen.dart';
 import 'screens/mesh/nearby_mesh_screen.dart';
+import 'screens/mesh/mesh_identity_bind_screen.dart';
 import 'screens/debug/field_validation_screen.dart';
 import 'services/auth_service.dart';
 import 'services/push_service.dart';
 import 'services/callkit_service.dart';
 import 'services/notification_service.dart';
 import 'services/api_base.dart';
+import 'services/local_message_store.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Hive.initFlutter();
+  await LocalMessageStore.instance.ensureInitialized();
   // DNS-failover base resolver: restore last-known-good API host and
   // verify it in the background (see services/api_base.dart).
   await ApiBase.init();
@@ -171,7 +184,14 @@ String? _normalizeTalkDeepLink(Uri u) {
       (u.host == 'talk.interactpak.com' || u.host == 'interactpak.com')) {
     if (u.path.startsWith('/j/')) {
       final code = u.path.substring(3).split('/').first;
-      if (code.isNotEmpty) return '/j/${code.toUpperCase()}';
+      if (code.isNotEmpty) {
+        if (code.toUpperCase() == 'LOC' &&
+            u.queryParameters['lat'] != null &&
+            u.queryParameters['lng'] != null) {
+          return '/j/LOC?lat=${u.queryParameters['lat']}&lng=${u.queryParameters['lng']}';
+        }
+        return '/j/${code.toUpperCase()}';
+      }
     }
     if (u.path.isEmpty || u.path == '/') return '/';
     return u.path;
@@ -221,6 +241,14 @@ final _router = GoRouter(
       builder: (ctx, st) {
         final code = (st.pathParameters['code'] ?? '').trim().toUpperCase();
         final upper = code;
+        // Shared location deep link — not a meeting room code.
+        if (upper == 'LOC') {
+          final lat = double.tryParse(st.uri.queryParameters['lat'] ?? '');
+          final lng = double.tryParse(st.uri.queryParameters['lng'] ?? '');
+          if (lat != null && lng != null) {
+            return _LocationPinDeepLinkScreen(lat: lat, lng: lng);
+          }
+        }
         // Walkie / PTT room codes → LiveKit hold-to-speak room.
         if (upper.startsWith('WALKIE') || upper.startsWith('PTT')) {
           return LiveRoomScreen(
@@ -285,14 +313,27 @@ final _router = GoRouter(
           LanWalkieScreen(initialCode: st.uri.queryParameters['code']),
     ),
     GoRoute(
+      path: '/ble-walkie',
+      builder: (_, __) => const BleWalkieScreen(),
+    ),
+    GoRoute(
         path: '/nearby-mesh',
         builder: (_, __) => const NearbyMeshScreen()),
+    GoRoute(
+        path: '/mesh-identity',
+        builder: (_, __) => const MeshIdentityBindScreen()),
     GoRoute(
         path: '/nearby-devices',
         builder: (_, __) => const NearbyBleDevicesScreen()),
     GoRoute(
         path: '/lora-bridge',
         builder: (_, __) => const LoraBridgeScreen()),
+    GoRoute(
+        path: '/iot-comms',
+        builder: (_, __) => const IotCommsScreen()),
+    GoRoute(
+        path: '/location-trace',
+        builder: (_, __) => const LocationTraceScreen()),
     GoRoute(
         path: '/field-validation',
         builder: (_, __) => const FieldValidationScreen()),
@@ -334,6 +375,8 @@ final _router = GoRouter(
       },
     ),
     GoRoute(path: '/invite', builder: (_, __) => const InviteScreen()),
+    GoRoute(path: '/find-friends', builder: (_, __) => const FindFriendsScreen()),
+    GoRoute(path: '/social-panel', builder: (_, __) => const SocialPanelScreen()),
     GoRoute(path: '/dialpad', builder: (_, __) => const DialPadScreen()),
     GoRoute(
         path: '/call-history',
@@ -609,6 +652,50 @@ class _GateState extends ConsumerState<_Gate> {
       body: Center(
         child: CircularProgressIndicator(
           valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFBE9A5F)),
+        ),
+      ),
+    );
+  }
+}
+
+/// Full-screen handler for https://talk.interactpak.com/j/LOC?lat=&lng=
+class _LocationPinDeepLinkScreen extends StatelessWidget {
+  const _LocationPinDeepLinkScreen({required this.lat, required this.lng});
+
+  final double lat;
+  final double lng;
+
+  @override
+  Widget build(BuildContext context) {
+    final pin = SharedLocationPin(lat: lat, lng: lng, label: 'Shared location');
+    final cs = Theme.of(context).colorScheme;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Shared location')),
+      body: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            LocationPinBubble(
+              pin: pin,
+              foreground: cs.onSurface,
+              mutedForeground: cs.onSurfaceVariant,
+            ),
+            const SizedBox(height: 20),
+            FilledButton.icon(
+              onPressed: () async {
+                final ok = await openSharedLocationPin(pin);
+                if (!context.mounted) return;
+                if (!ok) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Could not open Maps.')),
+                  );
+                }
+              },
+              icon: const Icon(Icons.navigation_outlined),
+              label: const Text('Open in Maps'),
+            ),
+          ],
         ),
       ),
     );

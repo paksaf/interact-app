@@ -17,6 +17,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../services/auth_service.dart';
@@ -38,6 +40,8 @@ class LanWalkieScreen extends ConsumerStatefulWidget {
 class _LanWalkieScreenState extends ConsumerState<LanWalkieScreen> {
   final _svc = LanWalkieService.instance;
   late final TextEditingController _codeCtrl;
+  late final TextEditingController _manualHostCtrl;
+  late final TextEditingController _manualPortCtrl;
 
   List<LanWalkieChannel> _channels = const [];
   StreamSubscription<List<LanWalkieChannel>>? _sub;
@@ -53,6 +57,8 @@ class _LanWalkieScreenState extends ConsumerState<LanWalkieScreen> {
     _codeCtrl = TextEditingController(
       text: (widget.initialCode ?? 'WALKIE1').toUpperCase(),
     );
+    _manualHostCtrl = TextEditingController();
+    _manualPortCtrl = TextEditingController();
     _boot();
   }
 
@@ -89,6 +95,8 @@ class _LanWalkieScreenState extends ConsumerState<LanWalkieScreen> {
     // the relay survives navigating into the call and back.
     unawaited(_svc.stopDiscovery());
     _codeCtrl.dispose();
+    _manualHostCtrl.dispose();
+    _manualPortCtrl.dispose();
     super.dispose();
   }
 
@@ -122,13 +130,38 @@ class _LanWalkieScreenState extends ConsumerState<LanWalkieScreen> {
       builder: (_) => MeetingRoomScreen(
         roomCode: c.code,
         isHost: isHost,
-        // Voice-first: a walkie is audio, and video over a phone-hosted
-        // relay on a field router is not a promise worth making in Phase 1.
         mode: 'voice',
         lanSignalUrl: c.wsUrl,
         lanRoomId: c.roomId,
       ),
     ));
+  }
+
+  void _joinManual() {
+    final host = _manualHostCtrl.text.trim();
+    final port = int.tryParse(_manualPortCtrl.text.trim());
+    if (host.isEmpty || port == null || port <= 0) {
+      setState(() => _error = 'Enter host IP and port from the hosting phone.');
+      return;
+    }
+    try {
+      final ch = _svc.channelFromManual(code: _code, host: host, port: port);
+      setState(() => _error = null);
+      _enterRoom(ch, isHost: false);
+    } catch (e) {
+      setState(() => _error = '$e');
+    }
+  }
+
+  void _copyHostJoinInfo() {
+    final ip = _svc.hostLanIp;
+    final port = _svc.hostedPort;
+    if (ip == null || port == null) return;
+    final text = '$ip:$port · code $_code';
+    Clipboard.setData(ClipboardData(text: text));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Host IP + port copied — share with joiner')),
+    );
   }
 
   @override
@@ -187,6 +220,21 @@ class _LanWalkieScreenState extends ConsumerState<LanWalkieScreen> {
                       '$_hostPeers device${_hostPeers == 1 ? '' : 's'} connected',
                       style: TextStyle(color: cs.primary, fontWeight: FontWeight.w600),
                     ),
+                    if (_svc.hostLanIp != null && _svc.hostedPort != null) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        'Join manually: ${_svc.hostLanIp}:${_svc.hostedPort}',
+                        style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
+                      ),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: _copyHostJoinInfo,
+                          icon: const Icon(Icons.copy, size: 16),
+                          label: const Text('Copy for joiner'),
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 8),
                     Row(
                       children: [
@@ -232,10 +280,23 @@ class _LanWalkieScreenState extends ConsumerState<LanWalkieScreen> {
           if (_channels.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 12),
-              child: Text(
-                'Nothing found yet. Someone has to press “Host this channel” '
-                'on one phone — then it shows up here on the others.',
-                style: TextStyle(color: cs.onSurfaceVariant),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'Nothing found yet. Someone has to press “Host this channel” '
+                    'on one phone — then it shows up here on the others.\n\n'
+                    'iPhone: Settings → INTERACT → Local Network ON. '
+                    'If discovery stays empty, use manual join below.',
+                    style: TextStyle(color: cs.onSurfaceVariant),
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: () => context.push('/ble-walkie'),
+                    icon: const Icon(Icons.bluetooth_audio),
+                    label: const Text('Try BLE Walkie (no Wi‑Fi)'),
+                  ),
+                ],
               ),
             )
           else
@@ -253,6 +314,57 @@ class _LanWalkieScreenState extends ConsumerState<LanWalkieScreen> {
                   child: const Text('Join'),
                 ),
               ),
+          const SizedBox(height: 16),
+          ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            title: const Text(
+              'Join by IP (mDNS blocked)',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            subtitle: Text(
+              'Host shares IP:port from their screen',
+              style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+            ),
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    flex: 3,
+                    child: TextField(
+                      controller: _manualHostCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Host IP',
+                        hintText: '192.168.1.42',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      keyboardType: TextInputType.number,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      controller: _manualPortCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Port',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      keyboardType: TextInputType.number,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: FilledButton.tonal(
+                  onPressed: _joinManual,
+                  child: const Text('Join with IP'),
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 24),
           Text(
             'Voice only in this first version, and it stays on this Wi-Fi — '

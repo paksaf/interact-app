@@ -41,14 +41,16 @@ class ApiBase {
   static DateTime _lastProbe = DateTime.fromMillisecondsSinceEpoch(0);
   static bool _probing = false;
 
-  /// Restore last-known-good base, then verify it in the background.
+  /// Restore last-known-good base, then verify/switch before the first API
+  /// call. (Background-only probing left cold-start message/call requests
+  /// hitting a dead saved host — especially on iPhone cellular DNS.)
   static Future<void> init() async {
     try {
       final sp = await SharedPreferences.getInstance();
       final saved = sp.getString('talk_api_base');
       if (saved != null && candidates.contains(saved)) _current = saved;
     } catch (_) {}
-    unawaited(checkAndMaybeSwitch());
+    await checkAndMaybeSwitch();
   }
 
   /// Persist [base] as current (must be a known candidate).
@@ -126,6 +128,9 @@ class ApiBase {
         s.contains('connection timed out') ||
         s.contains('timed out');
   }
+
+  /// Liveness probe for chat connectivity UI (Phase 2).
+  static Future<bool> isCloudReachable() => _reachable(_current);
 
   static Future<bool> _reachable(String base) async {
     try {

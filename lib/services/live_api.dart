@@ -266,6 +266,65 @@ class LiveApi {
     }
   }
 
+  /// Room-scoped heartbeat for townhall audience analytics.
+  Future<void> livePresenceBeat({
+    required String roomCode,
+    required String role,
+    required String focus,
+    String? area,
+  }) async {
+    try {
+      final res = await http
+          .post(
+            Uri.parse('$_kBase/api/v1/talk/live/presence/beat'),
+            headers: await _headers(),
+            body: jsonEncode({
+              'roomCode': roomCode,
+              'role': role,
+              'focus': focus,
+              if (area != null && area.isNotEmpty) 'area': area,
+            }),
+          )
+          .timeout(const Duration(seconds: 6));
+      if (res.statusCode == 404) return; // backend not deployed yet
+    } catch (_) {/* best-effort */}
+  }
+
+  /// Explicit leave when disconnecting from a live room.
+  Future<void> livePresenceLeave(String roomCode) async {
+    try {
+      await http
+          .post(
+            Uri.parse('$_kBase/api/v1/talk/live/presence/leave'),
+            headers: await _headers(),
+            body: jsonEncode({'roomCode': roomCode}),
+          )
+          .timeout(const Duration(seconds: 6));
+    } catch (_) {/* best-effort */}
+  }
+
+  /// Host/moderator analytics poll. Returns null when unavailable.
+  Future<LiveRoomAnalytics?> liveAnalytics(String roomCode) async {
+    try {
+      final res = await http
+          .get(
+            Uri.parse(
+              '$_kBase/api/v1/talk/live/analytics?code=${Uri.encodeComponent(roomCode)}',
+            ),
+            headers: await _headers(),
+          )
+          .timeout(const Duration(seconds: 8));
+      if (res.statusCode == 404 || res.statusCode == 403) return null;
+      if (res.statusCode >= 400) return null;
+      final body = _decode(res.body);
+      final data = body?['data'];
+      if (data is! Map) return null;
+      return LiveRoomAnalytics.fromData(Map<String, dynamic>.from(data));
+    } catch (_) {
+      return null;
+    }
+  }
+
   Map<String, dynamic>? _decode(String s) {
     try {
       final v = jsonDecode(s);
@@ -282,4 +341,48 @@ class LiveApiException implements Exception {
   final int? statusCode;
   @override
   String toString() => message;
+}
+
+/// Host-facing townhall audience snapshot from GET /talk/live/analytics.
+class LiveRoomAnalytics {
+  const LiveRoomAnalytics({
+    required this.concurrentNow,
+    required this.peakConcurrent,
+    required this.foregroundCount,
+    required this.backgroundCount,
+    required this.byRole,
+    required this.byArea,
+  });
+
+  final int concurrentNow;
+  final int peakConcurrent;
+  final int foregroundCount;
+  final int backgroundCount;
+  final Map<String, int> byRole;
+  final Map<String, int> byArea;
+
+  factory LiveRoomAnalytics.fromData(Map<String, dynamic> d) {
+    Map<String, int> mapOf(dynamic v) {
+      if (v is! Map) return const {};
+      return v.map((k, val) => MapEntry(k.toString(), (val as num?)?.toInt() ?? 0));
+    }
+
+    return LiveRoomAnalytics(
+      concurrentNow: (d['concurrentNow'] as num?)?.toInt() ?? 0,
+      peakConcurrent: (d['peakConcurrent'] as num?)?.toInt() ?? 0,
+      foregroundCount: (d['foregroundCount'] as num?)?.toInt() ?? 0,
+      backgroundCount: (d['backgroundCount'] as num?)?.toInt() ?? 0,
+      byRole: mapOf(d['byRole']),
+      byArea: mapOf(d['byArea']),
+    );
+  }
+
+  static const empty = LiveRoomAnalytics(
+    concurrentNow: 0,
+    peakConcurrent: 0,
+    foregroundCount: 0,
+    backgroundCount: 0,
+    byRole: {},
+    byArea: {},
+  );
 }

@@ -40,6 +40,8 @@ import 'dart:math';
 import 'package:bonsoir/bonsoir.dart';
 import 'package:flutter/foundation.dart';
 
+import '../core/net/local_lan_ip.dart';
+
 /// mDNS service type. Distinct from `_interact-lan._tcp` (LanService's
 /// text transport) — a walkie host is a different capability and joiners
 /// must not confuse the two.
@@ -107,10 +109,14 @@ class LanWalkieService {
   BonsoirBroadcast? _broadcast;
   final _LanSignalRelay _relay = _LanSignalRelay();
   String _hostedCode = '';
+  String? _hostLanIp;
 
   bool get isHosting => _server != null;
   String get hostedCode => _hostedCode;
   int? get hostedPort => _server?.port;
+
+  /// LAN IPv4 of this device while hosting (for manual join when mDNS fails).
+  String? get hostLanIp => _hostLanIp;
 
   /// Number of devices currently connected to our relay (excludes nobody —
   /// the host's own client connects over loopback like any other peer).
@@ -139,6 +145,7 @@ class LanWalkieService {
     final server = await HttpServer.bind(InternetAddress.anyIPv4, 0);
     _server = server;
     _hostedCode = normalized;
+    _hostLanIp = await primaryLanIPv4();
     server.listen(_onRequest, onError: (Object e) {
       debugPrint('[lan-walkie] server error: $e');
     });
@@ -155,6 +162,7 @@ class LanWalkieService {
         _kAttrHost: hostName,
         _kAttrApp: _kAppTag,
         _kAttrVersion: '1',
+        if (_hostLanIp != null) 'lanIp': _hostLanIp!,
       },
     );
     final broadcast = BonsoirBroadcast(service: service);
@@ -181,6 +189,7 @@ class LanWalkieService {
     }
     _server = null;
     _hostedCode = '';
+    _hostLanIp = null;
   }
 
   /// The channel record for our OWN hosted room, so the host's client can
@@ -283,6 +292,27 @@ class LanWalkieService {
   void _emit() {
     if (_channelsCtrl.isClosed) return;
     _channelsCtrl.add(discovered);
+  }
+
+  /// Join a channel when mDNS discovery is empty (iOS Local Network off, AP
+  /// isolation, etc.). [host] must be the host phone's LAN IPv4; [port] the
+  /// relay port shown on the host screen.
+  LanWalkieChannel channelFromManual({
+    required String code,
+    required String host,
+    required int port,
+    String hostName = 'Manual join',
+  }) {
+    final normalized = code.trim().toUpperCase();
+    if (normalized.isEmpty || host.trim().isEmpty || port <= 0) {
+      throw ArgumentError('code, host, and port are required');
+    }
+    return LanWalkieChannel(
+      code: normalized,
+      hostName: hostName,
+      host: host.trim(),
+      port: port,
+    );
   }
 
   Future<void> dispose() async {

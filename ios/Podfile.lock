@@ -2,6 +2,9 @@ PODS:
   - audioplayers_darwin (0.0.1):
     - Flutter
     - FlutterMacOS
+  - ble_peripheral (0.0.1):
+    - Flutter
+    - FlutterMacOS
   - bonsoir_darwin (0.0.1):
     - Flutter
     - FlutterMacOS
@@ -262,6 +265,7 @@ PODS:
 
 DEPENDENCIES:
   - audioplayers_darwin (from `.symlinks/plugins/audioplayers_darwin/darwin`)
+  - ble_peripheral (from `.symlinks/plugins/ble_peripheral/darwin`)
   - bonsoir_darwin (from `.symlinks/plugins/bonsoir_darwin/darwin`)
   - camera_avfoundation (from `.symlinks/plugins/camera_avfoundation/ios`)
   - connectivity_plus (from `.symlinks/plugins/connectivity_plus/ios`)
@@ -338,6 +342,8 @@ SPEC REPOS:
 EXTERNAL SOURCES:
   audioplayers_darwin:
     :path: ".symlinks/plugins/audioplayers_darwin/darwin"
+  ble_peripheral:
+    :path: ".symlinks/plugins/ble_peripheral/darwin"
   bonsoir_darwin:
     :path: ".symlinks/plugins/bonsoir_darwin/darwin"
   camera_avfoundation:
@@ -419,6 +425,7 @@ EXTERNAL SOURCES:
 
 SPEC CHECKSUMS:
   audioplayers_darwin: 835ced6edd4c9fc8ebb0a7cc9e294a91d99917d5
+  ble_peripheral: 1d6cb378caaef61cd39410652a4de1a68dfba4f2
   bonsoir_darwin: 29c7ccf356646118844721f36e1de4b61f6cbd0e
   camera_avfoundation: 5675ca25298b6f81fa0a325188e7df62cc217741
   connectivity_plus: cb623214f4e1f6ef8fe7403d580fdad517d2f7dd
@@ -489,6 +496,6 @@ SPEC CHECKSUMS:
   WebRTC-SDK: ab9b5319e458c2bfebdc92b3600740da35d5630d
   whisper_flutter_new: 9276535665f51f845831fe94859b2cccd0334a70
 
-PODFILE CHECKSUM: 897a52356939db6407df13fe2cf6f0568e0bf1bb
+PODFILE CHECKSUM: dc73bec318c57799b661281b301b22e143d41c5f
 
 COCOAPODS: 1.16.2

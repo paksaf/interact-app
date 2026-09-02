@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0
 //
 // Meshtastic BLE adapter — official GATT via flutter_reactive_ble (BSD-3).
-// Connect + want_config + FromRadio drain. MeshPacket text TX later.
+// Connect + want_config + FromRadio drain + MeshPacket UTF-8 TX (Phase 4 P1).
 import 'dart:async';
 
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
+
+import '../core/meshtastic/meshtastic_packet_codec.dart';
 
 final meshtasticBridgeServiceProvider =
     Provider<MeshtasticBridgeService>((ref) => MeshtasticBridgeService());
@@ -168,15 +170,20 @@ class MeshtasticBridgeService {
     }
   }
 
-  Future<void> sendTextHint(String text) async {
-    if (!_connected || _toRadio == null) {
-      throw Exception('Not connected to Meshtastic');
+  Future<void> sendText(String text) async {
+    final tx = _toRadio;
+    if (!_connected || tx == null) {
+      throw StateError('Not connected to Meshtastic');
     }
+    final bytes = MeshtasticPacketCodec.encodeTextToRadio(text.trim());
+    await tx.write(bytes, withResponse: true);
     _events.add(
-      'Text TX needs MeshPacket protobuf — use DIY LoRa for UTF-8 today. '
-      'Hint: ${text.length > 40 ? text.substring(0, 40) : text}',
+      '→ Text TX ${text.length} chars (${bytes.length}B MeshPacket)',
     );
   }
+
+  /// @deprecated use [sendText]
+  Future<void> sendTextHint(String text) => sendText(text);
 
   Future<void> disconnect() async {
     await _fromNumSub?.cancel();

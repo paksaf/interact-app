@@ -23,6 +23,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/camera_effects.dart';
 import '../../services/live_api.dart';
+import '../../services/live_room_presence_service.dart';
 import '../../services/livekit_service.dart';
 import '../../services/talk_api.dart';
 import '../../widgets/in_call_busy_banner.dart';
@@ -47,7 +48,8 @@ class LiveRoomScreen extends ConsumerStatefulWidget {
   ConsumerState<LiveRoomScreen> createState() => _LiveRoomScreenState();
 }
 
-class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
+class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen>
+    with WidgetsBindingObserver {
   final LiveRoomController _ctrl = LiveRoomController();
   bool _starting = true;
   String? _startError;
@@ -62,16 +64,27 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
   late final TalkApi _talkApi;
   String? _callLogId;
   DateTime? _callStartedAt;
+  LiveRoomPresenceService? _presence;
+  LiveRoomAnalytics _analytics = LiveRoomAnalytics.empty;
+  StreamSubscription<LiveRoomAnalytics>? _analyticsSub;
 
   bool get _isPtt => widget.mode == 'ptt';
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _talkApi = ref.read(talkApiProvider);
     WakelockPlus.enable();
     _ctrl.addListener(_onCtrlChanged);
     _start();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final foreground = state == AppLifecycleState.resumed;
+    _presence?.updateFocus(state);
+    unawaited(_ctrl.publishAppFocus(foreground));
   }
 
   /// Auto-reconnect (re-mints a fresh token via _start) with linear backoff
@@ -118,6 +131,17 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
       await _ctrl.applyCameraEffect(effect);
       await _ctrl.connect(join);
       if (!mounted) return;
+      final canPoll = join.isHost || join.role == 'moderator';
+      _presence = ref.read(liveRoomPresenceServiceProvider);
+      await _presence!.start(
+        roomCode: join.roomCode,
+        role: join.role,
+        pollAnalytics: canPoll,
+      );
+      await _analyticsSub?.cancel();
+      _analyticsSub = _presence!.analyticsStream?.listen((a) {
+        if (mounted) setState(() => _analytics = a);
+      });
       // Re-bind after track exists (connect also re-applies if non-none).
       if (effect != CameraEffect.none) {
         await _ctrl.applyCameraEffect(effect);
@@ -136,6 +160,10 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
   }
 
   Future<void> _leave() async {
+    await _analyticsSub?.cancel();
+    _analyticsSub = null;
+    await _presence?.stop();
+    _presence = null;
     final logId = _callLogId;
     _callLogId = null;
     if (logId != null && logId.isNotEmpty) {
@@ -156,6 +184,9 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    unawaited(_analyticsSub?.cancel());
+    unawaited(_presence?.stop());
     WakelockPlus.disable();
     _ctrl.removeListener(_onCtrlChanged);
     _ctrl.dispose();
@@ -588,6 +619,10 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
   Widget _topBar() {
     final count = _ctrl.tiles.length;
     final hands = _ctrl.raisedHandCount;
+    final canSeeAnalytics = _ctrl.isHost || _ctrl.role == 'moderator';
+    final sfuBackground = _ctrl.tiles
+        .where((t) => t.focus == 'background' && !t.isLocal)
+        .length;
     return Positioned(
       top: 12,
       left: 16,
@@ -595,6 +630,31 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
       child: Row(
         children: [
           _chip(Icons.groups, count == 1 ? 'Just you' : '$count in call'),
+          if (canSeeAnalytics && _analytics.concurrentNow > 0) ...[
+            const SizedBox(width: 8),
+            _chip(
+              Icons.visibility,
+              '${_analytics.concurrentNow} watching',
+              accent: true,
+            ),
+          ],
+          if (canSeeAnalytics &&
+              (_analytics.foregroundCount > 0 ||
+                  _analytics.backgroundCount > 0)) ...[
+            const SizedBox(width: 8),
+            _chip(
+              Icons.center_focus_strong,
+              '${_analytics.foregroundCount} focused',
+            ),
+            const SizedBox(width: 8),
+            _chip(
+              Icons.visibility_off,
+              '${_analytics.backgroundCount} unfocused',
+            ),
+          ] else if (sfuBackground > 0) ...[
+            const SizedBox(width: 8),
+            _chip(Icons.visibility_off, '$sfuBackground bg (SFU)'),
+          ],
           const SizedBox(width: 8),
           _chip(Icons.tv, 'Room ${_ctrl.roomCode}'),
           if (_inSpeakerLayout && _ctrl.screenShareTile == null) ...[
@@ -906,6 +966,7 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
   Widget _rosterPanel() {
     final tiles = _ctrl.tiles;
     final canModerate = _ctrl.isHost || _ctrl.role == 'moderator';
+    final canSeeAnalytics = canModerate;
     return Positioned(
       top: 56,
       right: 16,
@@ -917,6 +978,34 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (canSeeAnalytics) ...[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Audience',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Watching: ${_analytics.concurrentNow} · Peak: ${_analytics.peakConcurrent}',
+                      style: const TextStyle(color: Colors.white70, fontSize: 12),
+                    ),
+                    Text(
+                      'Focused: ${_analytics.foregroundCount} · Unfocused: ${_analytics.backgroundCount}',
+                      style: const TextStyle(color: Colors.white70, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 16, color: Colors.white24),
+            ],
             const Padding(
               padding: EdgeInsets.all(12),
               child: Text('Participants',
@@ -944,11 +1033,13 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen> {
                     // Who-joined info (host request 2026-08-27): role +
                     // device-reported coarse area ("Pakistan · PKT (UTC+5)").
                     // Peers on older builds show role only.
-                    subtitle: (t.role != null || t.area != null)
+                    subtitle: (t.role != null || t.area != null || t.focus != null)
                         ? Text(
                             [
                               if (t.role != null && t.role!.isNotEmpty) t.role!,
                               if (t.area != null && t.area!.isNotEmpty) t.area!,
+                              if (t.focus == 'background') 'unfocused',
+                              if (t.focus == 'foreground') 'focused',
                             ].join(' — '),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,

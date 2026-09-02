@@ -11,6 +11,9 @@
 // Reuses the fleet's interact-lifestyle Firebase project. Requires
 // android/app/google-services.json to build (see docs/BACKGROUND_RING_AND_CAPTIONS).
 import 'dart:convert';
+import 'dart:io' show Platform;
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -158,15 +161,16 @@ class PushService {
     }
     _wired = true;
 
-    await FirebaseMessaging.instance.requestPermission();
-    // Background handler is registered in main() before runApp (FCM requirement).
+    try {
+      await FirebaseMessaging.instance.requestPermission();
+      // Background handler is registered in main() before runApp (FCM requirement).
 
-    final token = await FirebaseMessaging.instance.getToken();
-    if (token != null) await _register(token, auth);
-    FirebaseMessaging.instance.onTokenRefresh
-        .listen((t) => _register(t, auth));
+      final token = await FirebaseMessaging.instance.getToken();
+      if (token != null) await _register(token, auth);
+      FirebaseMessaging.instance.onTokenRefresh
+          .listen((t) => _register(t, auth));
 
-    // Foreground delivery. While the app is OPEN/resumed, the in-app poll
+      // Foreground delivery. While the app is OPEN/resumed, the in-app poll
     // (call_signaling → IncomingCallScreen) is the live-ring surface — do NOT
     // raise CallKit OR a max-importance / fullScreenIntent local notification.
     // On Samsung those heads-ups push/steal focus from the Calls dashboard
@@ -229,6 +233,11 @@ class PushService {
     // Cold tap — app was killed and launched by tapping the ring push.
     final initial = await FirebaseMessaging.instance.getInitialMessage();
     if (initial != null && _isCallRing(initial.data)) _onCallTap?.call();
+    } catch (e) {
+      // iOS ships without GoogleService-Info.plist until Firebase is provisioned;
+      // degrade to poll-only ring — must not break AppShell startup.
+      debugPrint('PushService init skipped (Firebase not configured?): $e');
+    }
   }
 
   /// Remove this device's token on logout so the user stops getting rings.
@@ -259,7 +268,7 @@ class PushService {
           'Authorization': 'Bearer $jwt',
         },
         body: jsonEncode({
-          'platform': 'android',
+          'platform': Platform.isIOS ? 'ios' : 'android',
           'token': token,
           'appId': _kAppId,
         }),

@@ -20,15 +20,20 @@ class LoraBridgeScreen extends ConsumerStatefulWidget {
 
 class _LoraBridgeScreenState extends ConsumerState<LoraBridgeScreen> {
   final _textCtrl = TextEditingController();
+  final _meshTextCtrl = TextEditingController();
   final _log = <LoraBridgeMessage>[];
+  final _meshLog = <String>[];
   List<LoraBridgeCandidate> _candidates = const [];
   StreamSubscription? _candSub;
   StreamSubscription? _msgSub;
   StreamSubscription? _connSub;
+  StreamSubscription? _meshEventsSub;
   bool _connected = false;
+  bool _meshConnected = false;
   bool _scanning = false;
   String? _error;
   String? _status;
+  String? _meshStatus;
 
   @override
   void initState() {
@@ -55,6 +60,14 @@ class _LoraBridgeScreenState extends ConsumerState<LoraBridgeScreen> {
       }
     });
     await _scan();
+    _meshEventsSub =
+        ref.read(meshtasticBridgeServiceProvider).events.listen((line) {
+      if (!mounted) return;
+      setState(() {
+        _meshLog.add(line);
+        if (_meshLog.length > 80) _meshLog.removeAt(0);
+      });
+    });
   }
 
   Future<void> _scan() async {
@@ -138,12 +151,31 @@ class _LoraBridgeScreenState extends ConsumerState<LoraBridgeScreen> {
     }
   }
 
+  Future<void> _sendMeshText() async {
+    final text = _meshTextCtrl.text.trim();
+    if (text.isEmpty) return;
+    try {
+      await ref.read(meshtasticBridgeServiceProvider).sendText(text);
+      _meshTextCtrl.clear();
+      if (mounted) {
+        setState(() => _meshStatus = 'MeshPacket sent — check peer node');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Meshtastic send failed: $e')),
+      );
+    }
+  }
+
   @override
   void dispose() {
     _candSub?.cancel();
     _msgSub?.cancel();
     _connSub?.cancel();
+    _meshEventsSub?.cancel();
     _textCtrl.dispose();
+    _meshTextCtrl.dispose();
     final svc = ref.read(loraBridgeServiceProvider);
     svc.stopScan();
     // Keep connection if user pops? Prefer clean disconnect on leave.
@@ -313,10 +345,20 @@ class _LoraBridgeScreenState extends ConsumerState<LoraBridgeScreen> {
                 ExpansionTile(
                   leading: const Icon(Icons.radar),
                   title: const Text('Meshtastic adapter'),
-                  subtitle: const Text(
-                    'Official GATT — connect + config handshake; text TX next',
+                  subtitle: Text(
+                    _meshConnected
+                        ? 'Connected — UTF-8 MeshPacket TX via ToRadio GATT'
+                        : 'Official GATT — connect, then send UTF-8 text',
                   ),
                   children: [
+                    if (_meshStatus != null)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                        child: Text(
+                          _meshStatus!,
+                          style: TextStyle(fontSize: 12, color: cs.outline),
+                        ),
+                      ),
                     ListTile(
                       title: const Text('Scan & connect Meshtastic'),
                       trailing: const Icon(Icons.search),
@@ -354,7 +396,8 @@ class _LoraBridgeScreenState extends ConsumerState<LoraBridgeScreen> {
                                               await svc.connect(c);
                                               if (!context.mounted) return;
                                               setState(() {
-                                                _status =
+                                                _meshConnected = true;
+                                                _meshStatus =
                                                     'Meshtastic linked: ${c.name}';
                                               });
                                               ScaffoldMessenger.of(context)
@@ -362,8 +405,7 @@ class _LoraBridgeScreenState extends ConsumerState<LoraBridgeScreen> {
                                                 SnackBar(
                                                   content: Text(
                                                     'Connected ${c.name}. '
-                                                    'FromRadio protobuf drain active; '
-                                                    'UTF-8 chat → DIY LoRa for now.',
+                                                    'Type below to send MeshPacket text.',
                                                   ),
                                                 ),
                                               );
@@ -382,6 +424,57 @@ class _LoraBridgeScreenState extends ConsumerState<LoraBridgeScreen> {
                         );
                       },
                     ),
+                    if (_meshConnected) ...[
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: _meshTextCtrl,
+                                decoration: const InputDecoration(
+                                  hintText: 'Meshtastic text (≤200 bytes UTF-8)',
+                                  border: OutlineInputBorder(),
+                                  isDense: true,
+                                ),
+                                onSubmitted: (_) => _sendMeshText(),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            IconButton.filled(
+                              onPressed: _sendMeshText,
+                              icon: const Icon(Icons.send),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (_meshLog.isNotEmpty)
+                        SizedBox(
+                          height: 96,
+                          child: ListView.builder(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            itemCount: _meshLog.length,
+                            itemBuilder: (_, i) => Text(
+                              _meshLog[i],
+                              style: TextStyle(fontSize: 11, color: cs.outline),
+                            ),
+                          ),
+                        ),
+                      ListTile(
+                        title: const Text('Disconnect Meshtastic'),
+                        leading: const Icon(Icons.link_off),
+                        onTap: () async {
+                          await ref
+                              .read(meshtasticBridgeServiceProvider)
+                              .disconnect();
+                          if (!mounted) return;
+                          setState(() {
+                            _meshConnected = false;
+                            _meshStatus = null;
+                          });
+                        },
+                      ),
+                    ],
                   ],
                 ),
               ],

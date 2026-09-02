@@ -517,6 +517,34 @@ class _MeTabState extends ConsumerState<MeTab> {
             ],
           ),
 
+          // FRIENDS & FAMILY — social panel, find friends, location trace.
+          _Group(
+            icon: Icons.favorite_outline,
+            title: 'Friends & Family',
+            subtitle: 'Updates, discovery & location',
+            initiallyExpanded: true,
+            children: [
+              _Tile(
+                icon: Icons.dynamic_feed_outlined,
+                label: 'Family & Friends panel',
+                subtitle: 'Share updates, circles, announcements',
+                onTap: () => context.push('/social-panel'),
+              ),
+              _Tile(
+                icon: Icons.person_search_outlined,
+                label: 'Find friends',
+                subtitle: '@username, phone, contacts, invite',
+                onTap: () => context.push('/find-friends'),
+              ),
+              _Tile(
+                icon: Icons.my_location,
+                label: 'Location trace',
+                subtitle: 'See live pins from chat & IoT',
+                onTap: () => context.push('/location-trace'),
+              ),
+            ],
+          ),
+
           // SECURITY & PRIVACY — encryption, backup, call privacy, and the
           // cross-device login tools moved from the Menu tab.
           _Group(

@@ -590,24 +590,26 @@ class AuthService {
     final t = await _rawToken();
     if (t == null || t.isEmpty || !_jwtStillValid(t)) return false;
     try {
-      final res = await http
-          .post(
-            Uri.parse('$_kSahulatBase/api/v1/talk/auth/session'),
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $t',
-            },
-            body: jsonEncode({
-              'deviceId': await deviceId(),
-              'deviceLabel': Platform.isAndroid ? 'Android' : 'Mobile',
-              'appId': 'com.interactpak.talk',
-            }),
-          )
-          .timeout(const Duration(seconds: 12));
-      if (res.statusCode >= 400) return false;
-      final data = _dataOf(res.body);
-      await _storeSessionFrom(data);
-      return (data['refreshToken'] as String?)?.isNotEmpty ?? false;
+      return await ApiBase.runWithFailover(() async {
+        final res = await http
+            .post(
+              Uri.parse('$_kSahulatBase/api/v1/talk/auth/session'),
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer $t',
+              },
+              body: jsonEncode({
+                'deviceId': await deviceId(),
+                'deviceLabel': Platform.isAndroid ? 'Android' : 'iOS',
+                'appId': 'com.interactpak.interact_talk',
+              }),
+            )
+            .timeout(const Duration(seconds: 12));
+        if (res.statusCode >= 400) return false;
+        final data = _dataOf(res.body);
+        await _storeSessionFrom(data);
+        return (data['refreshToken'] as String?)?.isNotEmpty ?? false;
+      });
     } catch (e) {
       debugPrint('establishRefreshTokenIfNeeded failed: $e');
       return false; // fail-soft — retried on the next launch
@@ -641,15 +643,35 @@ class AuthService {
   Future<RefreshOutcome> _doRefresh() async {
     final r = await _storage.read(key: _kRefreshKey);
     if (r == null || r.isEmpty) return RefreshOutcome.noCredential;
-    http.Response res;
     try {
-      res = await http
-          .post(
-            Uri.parse('$_kSahulatBase/api/v1/talk/auth/refresh'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'refreshToken': r}),
-          )
-          .timeout(const Duration(seconds: 12));
+      return await ApiBase.runWithFailover(() async {
+        final res = await http
+            .post(
+              Uri.parse('$_kSahulatBase/api/v1/talk/auth/refresh'),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({'refreshToken': r}),
+            )
+            .timeout(const Duration(seconds: 12));
+
+        if (res.statusCode == 200) {
+          try {
+            await _storeSessionFrom(_dataOf(res.body));
+            return RefreshOutcome.refreshed;
+          } catch (_) {
+            return RefreshOutcome.offlineKeep;
+          }
+        }
+
+        // DEFINITIVE rejection ONLY on the distinct revoke code. A 400/5xx/etc is
+        // transient (or a deploy skew) — keep the session and retry later.
+        if (res.statusCode == 401 &&
+            _errorCodeOf(res.body) == 'REFRESH_REVOKED') {
+          await _clearForRevoke();
+          sessionRevoked.value = true;
+          return RefreshOutcome.revoked;
+        }
+        return RefreshOutcome.offlineKeep;
+      });
     } on TimeoutException {
       return RefreshOutcome.offlineKeep;
     } on SocketException {
@@ -659,24 +681,6 @@ class AuthService {
     } catch (_) {
       return RefreshOutcome.offlineKeep;
     }
-
-    if (res.statusCode == 200) {
-      try {
-        await _storeSessionFrom(_dataOf(res.body));
-        return RefreshOutcome.refreshed;
-      } catch (_) {
-        return RefreshOutcome.offlineKeep;
-      }
-    }
-
-    // DEFINITIVE rejection ONLY on the distinct revoke code. A 400/5xx/etc is
-    // transient (or a deploy skew) — keep the session and retry later.
-    if (res.statusCode == 401 && _errorCodeOf(res.body) == 'REFRESH_REVOKED') {
-      await _clearForRevoke();
-      sessionRevoked.value = true;
-      return RefreshOutcome.revoked;
-    }
-    return RefreshOutcome.offlineKeep;
   }
 
   /// Persist the tokens from a /session or /refresh success envelope. The

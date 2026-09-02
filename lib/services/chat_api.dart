@@ -414,36 +414,38 @@ class ChatApi {
     String threadId, {
     int limit = 50,
   }) async {
-    final res = await http.get(
-      Uri.parse(
-        '$_kBase/api/v1/chat/threads/$threadId/messages?limit=$limit',
-      ),
-      headers: await _headers(),
-    );
-    if (res.statusCode >= 400) {
-      throw Exception('messages failed: ${res.statusCode}');
-    }
-    final body = jsonDecode(res.body) as Map<String, dynamic>;
-    // Stash caller's local uuid for isMine (#147), then use it.
-    await _captureMeFromBody(body);
-    final myUserId = await _auth.localUserId() ?? await _auth.phone();
-    final data = body['data'];
-    final ChatThread thread;
-    final List<dynamic> messagesRaw;
-    if (data is Map<String, dynamic>) {
-      thread = data['thread'] is Map<String, dynamic>
-          ? ChatThread.fromJson(data['thread'] as Map<String, dynamic>)
-          : ChatThread.fromJson(<String, dynamic>{'id': threadId});
-      messagesRaw = (data['messages'] as List?) ?? const [];
-    } else {
-      thread = ChatThread.fromJson(<String, dynamic>{'id': threadId});
-      messagesRaw = (data is List) ? data : const [];
-    }
-    final messages = messagesRaw
-        .whereType<Map<String, dynamic>>()
-        .map((j) => Message.fromJson(j, myId: myUserId))
-        .toList();
-    return (thread: thread, messages: messages);
+    return ApiBase.runWithFailover(() async {
+      final res = await http.get(
+        Uri.parse(
+          '$_kBase/api/v1/chat/threads/$threadId/messages?limit=$limit',
+        ),
+        headers: await _headers(),
+      );
+      if (res.statusCode >= 400) {
+        throw Exception('messages failed: ${res.statusCode}');
+      }
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      // Stash caller's local uuid for isMine (#147), then use it.
+      await _captureMeFromBody(body);
+      final myUserId = await _auth.localUserId() ?? await _auth.phone();
+      final data = body['data'];
+      final ChatThread thread;
+      final List<dynamic> messagesRaw;
+      if (data is Map<String, dynamic>) {
+        thread = data['thread'] is Map<String, dynamic>
+            ? ChatThread.fromJson(data['thread'] as Map<String, dynamic>)
+            : ChatThread.fromJson(<String, dynamic>{'id': threadId});
+        messagesRaw = (data['messages'] as List?) ?? const [];
+      } else {
+        thread = ChatThread.fromJson(<String, dynamic>{'id': threadId});
+        messagesRaw = (data is List) ? data : const [];
+      }
+      final messages = messagesRaw
+          .whereType<Map<String, dynamic>>()
+          .map((j) => Message.fromJson(j, myId: myUserId))
+          .toList();
+      return (thread: thread, messages: messages);
+    });
   }
 
   /// Set disappearing-message timer for a thread (0 = off).
@@ -465,12 +467,22 @@ class ChatApi {
   /// Send a text message. Pass [replyToId] (a hub message id) to quote/reply.
   /// On network failure the payload is queued in [OutboxService] and a local
   /// pending [Message] is returned so the bubble can show a clock icon.
-  Future<Message> sendText(String threadId, String text, {String? replyToId}) async {
-    return _send(threadId, body: {
-      'kind': 'text',
-      'body': text,
-      if (replyToId != null) 'replyToId': replyToId,
-    });
+  /// Set [queueOnFailure] false when [OfflineRouter] owns queueing.
+  Future<Message> sendText(
+    String threadId,
+    String text, {
+    String? replyToId,
+    bool queueOnFailure = true,
+  }) async {
+    return _send(
+      threadId,
+      body: {
+        'kind': 'text',
+        'body': text,
+        if (replyToId != null) 'replyToId': replyToId,
+      },
+      queueOnFailure: queueOnFailure,
+    );
   }
 
   /// Send a voice message. [mediaUrl] is the absolute URL from [uploadMedia];
@@ -572,6 +584,7 @@ class ChatApi {
     String threadId, {
     required Map<String, dynamic> body,
     String? logTag,
+    bool queueOnFailure = true,
   }) async {
     final url = '$_kBase/api/v1/chat/threads/$threadId/messages';
     final headers = await _headers();
@@ -588,40 +601,50 @@ class ChatApi {
       if (res.statusCode >= 400) {
         // Queue recoverable failures (offline / 5xx). Client 4xx stays loud.
         if (res.statusCode >= 500 || res.statusCode == 408 || res.statusCode == 429) {
-          await OutboxService.instance.enqueue(
-            url: url,
-            body: body,
-            headers: headers,
-            kind: 'chat_text',
-          );
-          return _pendingLocal(threadId, body, myUserId);
+          if (queueOnFailure) {
+            await OutboxService.instance.enqueue(
+              url: url,
+              body: body,
+              headers: headers,
+              kind: 'chat_text',
+              threadId: threadId,
+            );
+            return _pendingLocal(threadId, body, myUserId);
+          }
+          throw Exception('send failed: ${res.statusCode}');
         }
         throw Exception('send failed: ${res.statusCode}');
       }
       final resp = jsonDecode(res.body) as Map<String, dynamic>;
       return Message.fromJson(_extractObject(resp), myId: myUserId);
     } on SocketException {
+      if (!queueOnFailure) rethrow;
       await OutboxService.instance.enqueue(
         url: url,
         body: body,
         headers: headers,
         kind: 'chat_text',
+        threadId: threadId,
       );
       return _pendingLocal(threadId, body, myUserId);
     } on http.ClientException {
+      if (!queueOnFailure) rethrow;
       await OutboxService.instance.enqueue(
         url: url,
         body: body,
         headers: headers,
         kind: 'chat_text',
+        threadId: threadId,
       );
       return _pendingLocal(threadId, body, myUserId);
     } on TimeoutException {
+      if (!queueOnFailure) rethrow;
       await OutboxService.instance.enqueue(
         url: url,
         body: body,
         headers: headers,
         kind: 'chat_text',
+        threadId: threadId,
       );
       return _pendingLocal(threadId, body, myUserId);
     }
