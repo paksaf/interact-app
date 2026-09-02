@@ -24,7 +24,7 @@ class SharedLocationPin {
   final Uri? talkFallback;
   final bool live;
 
-  /// OpenStreetMap raster tile for a static map preview (no extra deps).
+  /// OpenStreetMap raster tile for a static map preview (no API key).
   String get previewTileUrl {
     const z = 15;
     final n = math.pow(2, z).toDouble();
@@ -36,7 +36,7 @@ class SharedLocationPin {
         n)
         .floor()
         .clamp(0, n.toInt() - 1);
-    return 'https://tile.openstreetmap.org/$z/$x/$y.png';
+    return 'https://a.basemaps.cartocdn.com/rastertiles/voyager/$z/$x/$y.png';
   }
 
   String get coordsLabel =>

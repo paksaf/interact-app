@@ -21,17 +21,24 @@ const int kFriendMapMaxNativeZoom = 18;
 const double kFriendMapMaxZoom = 20.0;
 const double kFriendMapMinZoom = 2.0;
 const String kFriendMapAttribution = '© CARTO © OpenStreetMap contributors';
-const String _kUserAgent = 'com.interactpak.interactTalk';
+
+/// Must match the platform bundle / application id — tile CDNs and FMTC's HTTP
+/// stack behave badly with a mismatched User-Agent.
+String get kFriendMapUserAgent => Platform.isIOS
+    ? 'com.interactpak.interactTalk'
+    : 'com.interactpak.interact_talk';
 
 /// FMTC store: browse cache + offline region packs share one store, so a
 /// downloaded area is served from disk automatically when the network drops.
-const String kFriendMapFmtcStore = 'friendmap';
+/// Bump suffix when tile URL/provider changes so stale error tiles are dropped.
+const String kFriendMapFmtcStore = 'friendmap_v2';
+const String _kLegacyFriendMapStore = 'friendmap';
 
 IOClient _tileHttpClient() {
   // FMTC's default client chokes on some Android stacks (unknownFetchException);
   // a plain HTTP/1.1 IOClient is the documented workaround.
   final inner = HttpClient()
-    ..userAgent = _kUserAgent
+    ..userAgent = kFriendMapUserAgent
     ..connectionTimeout = const Duration(seconds: 10);
   return IOClient(inner);
 }
@@ -63,6 +70,10 @@ class OfflineMapsService {
     if (_ready) return;
     try {
       await FMTCObjectBoxBackend().initialise();
+      // Drop pre-CARTO / bad-tile cache (e.g. "API key required" PNGs).
+      try {
+        await const FMTCStore(_kLegacyFriendMapStore).manage.delete();
+      } catch (_) {}
       await const FMTCStore(kFriendMapFmtcStore).manage.create();
       _ready = true;
     } catch (e) {
@@ -70,15 +81,14 @@ class OfflineMapsService {
     }
   }
 
-  /// Online-first tile provider that writes browsed tiles into the offline
-  /// store and serves downloaded packs when the network is gone. Falls back to
-  /// a plain network provider if FMTC never initialised.
-  TileProvider tileProvider() {
-    if (!_ready) {
-      // Same HTTP client + user-agent as FMTC path — bare NetworkTileProvider
-      // fails on some Android stacks and can show blank / error tiles.
-      return NetworkTileProvider(httpClient: _tileHttpClient());
-    }
+  /// Direct Carto fetches — bypasses FMTC when the browse cache misbehaves on
+  /// Android (FMTCBrowsingError / unknownFetchException). Mirrors interact-maps.
+  TileProvider directNetworkTileProvider() =>
+      NetworkTileProvider(httpClient: _tileHttpClient());
+
+  /// Online-first FMTC browse cache + offline pack reads.
+  TileProvider fmtcTileProvider() {
+    if (!_ready) return directNetworkTileProvider();
     return FMTCTileProvider(
       stores: const {kFriendMapFmtcStore: BrowseStoreStrategy.readUpdateCreate},
       loadingStrategy: BrowseLoadingStrategy.onlineFirst,
@@ -86,10 +96,13 @@ class OfflineMapsService {
     );
   }
 
+  /// Default tile provider for the friends map (FMTC when ready).
+  TileProvider tileProvider() => fmtcTileProvider();
+
   TileLayer _downloadTileLayer(bool retina) => TileLayer(
         urlTemplate: kFriendMapTileUrl,
         subdomains: kFriendMapSubdomains,
-        userAgentPackageName: _kUserAgent,
+        userAgentPackageName: kFriendMapUserAgent,
         retinaMode: retina,
       );
 

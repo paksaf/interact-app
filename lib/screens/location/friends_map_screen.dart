@@ -7,6 +7,7 @@
 // pre-downloaded region renders offline too. Map stack (flutter_map + FMTC) is
 // ported from interact-maps-flutter. Added 2026-09-02.
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -42,11 +43,21 @@ class _FriendsMapScreenState extends ConsumerState<FriendsMapScreen> {
   LatLng? _myPos;
   bool _fittedOnce = false;
 
+  /// Self-heal: after 3 tile errors bypass FMTC and fetch Carto directly
+  /// (interact-maps pattern — fixes blank / stale tiles on some Android stacks).
+  int _tileErrorCount = 0;
+  bool _bypassTileCache = false;
+
   static const LatLng _fallbackCenter = LatLng(30.3753, 69.3451); // Pakistan
 
   @override
   void initState() {
     super.initState();
+    // A23/Samsung: FMTC browse can show blank or stale "API key" PNGs without
+    // firing errorTileCallback — load Carto directly; offline packs still use FMTC.
+    if (Platform.isAndroid) {
+      _bypassTileCache = true;
+    }
     unawaited(_bootstrap());
   }
 
@@ -158,6 +169,37 @@ class _FriendsMapScreenState extends ConsumerState<FriendsMapScreen> {
   String _distanceLabel(double m) =>
       m >= 1000 ? '${(m / 1000).toStringAsFixed(1)} km' : '${m.round()} m';
 
+  void _reportTileError(Object error) {
+    _tileErrorCount++;
+    if (!_bypassTileCache && _tileErrorCount >= 3) {
+      _bypassTileCache = true;
+      if (mounted) {
+        setState(() {});
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Map cache bypassed — loading tiles directly.'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+    } else {
+      debugPrint('Friends map tile error (#$_tileErrorCount): $error');
+    }
+  }
+
+  TileLayer _basemapLayer(BuildContext context) => TileLayer(
+        key: ValueKey('friendmap-${_bypassTileCache ? 'direct' : 'fmtc'}'),
+        urlTemplate: kFriendMapTileUrl,
+        subdomains: kFriendMapSubdomains,
+        userAgentPackageName: kFriendMapUserAgent,
+        maxNativeZoom: kFriendMapMaxNativeZoom,
+        retinaMode: RetinaMode.isHighDensity(context),
+        errorTileCallback: (tile, error, stack) => _reportTileError(error),
+        tileProvider: _bypassTileCache
+            ? OfflineMapsService.instance.directNetworkTileProvider()
+            : OfflineMapsService.instance.fmtcTileProvider(),
+      );
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -197,14 +239,7 @@ class _FriendsMapScreenState extends ConsumerState<FriendsMapScreen> {
               },
             ),
             children: [
-              TileLayer(
-                urlTemplate: kFriendMapTileUrl,
-                subdomains: kFriendMapSubdomains,
-                userAgentPackageName: 'com.interactpak.interactTalk',
-                maxNativeZoom: kFriendMapMaxNativeZoom,
-                retinaMode: RetinaMode.isHighDensity(context),
-                tileProvider: OfflineMapsService.instance.tileProvider(),
-              ),
+              _basemapLayer(context),
               MarkerLayer(markers: _buildMarkers(cs)),
             ],
           ),
