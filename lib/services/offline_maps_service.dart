@@ -14,13 +14,30 @@ import 'package:flutter_map_tile_caching/flutter_map_tile_caching.dart';
 import 'package:http/io_client.dart';
 
 /// Carto Voyager raster basemap — same tiles interact-maps uses.
+// Key-free OpenTopoMap raster — topographic detail (contours, trails, tracks,
+// unpaved 4x4 roads) for off-roading + offline use. Carto keyless tiles are
+// watermarked server-side; vector PMTiles can't be used here (pmtiles needs
+// protobuf 3, livekit needs protobuf 6). OpenTopoMap is interact-maps' terrain
+// layer. Higher-volume alternative if rate-limited: TomTom (keyed).
 const String kFriendMapTileUrl =
-    'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
-const List<String> kFriendMapSubdomains = ['a', 'b', 'c', 'd'];
-const int kFriendMapMaxNativeZoom = 18;
+    'https://tile.opentopomap.org/{z}/{x}/{y}.png';
+const List<String> kFriendMapSubdomains = <String>[]; // OSM: no {s}
+const int kFriendMapMaxNativeZoom = 17; // OpenTopoMap caps at 17
 const double kFriendMapMaxZoom = 20.0;
 const double kFriendMapMinZoom = 2.0;
-const String kFriendMapAttribution = '© CARTO © OpenStreetMap contributors';
+const String kFriendMapAttribution =
+    '© OpenTopoMap (CC-BY-SA) © OpenStreetMap contributors';
+
+// TomTom raster FALLBACK (keyed) — only used when an OpenTopoMap tile fails to
+// load (flutter_map fallbackUrl). Key comes from a build-time define, NOT source,
+// so no live key lands in git: build with --dart-define=TOMTOM_MAP_KEY=<key>.
+// Empty by default → no fallback (OpenTopoMap alone). Rotate + proxy via
+// maps.interactpak.com when you can.
+const String _kTomTomKey =
+    String.fromEnvironment('TOMTOM_MAP_KEY', defaultValue: '');
+String get kFriendMapFallbackTileUrl => _kTomTomKey.isEmpty
+    ? ''
+    : 'https://api.tomtom.com/map/1/tile/basic/main/{z}/{x}/{y}.png?key=$_kTomTomKey';
 
 /// Must match the platform bundle / application id — tile CDNs and FMTC's HTTP
 /// stack behave badly with a mismatched User-Agent.

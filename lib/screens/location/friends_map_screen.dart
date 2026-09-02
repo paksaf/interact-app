@@ -190,10 +190,13 @@ class _FriendsMapScreenState extends ConsumerState<FriendsMapScreen> {
   TileLayer _basemapLayer(BuildContext context) => TileLayer(
         key: ValueKey('friendmap-${_bypassTileCache ? 'direct' : 'fmtc'}'),
         urlTemplate: kFriendMapTileUrl,
+        fallbackUrl: kFriendMapFallbackTileUrl.isEmpty
+            ? null
+            : kFriendMapFallbackTileUrl,
         subdomains: kFriendMapSubdomains,
         userAgentPackageName: kFriendMapUserAgent,
         maxNativeZoom: kFriendMapMaxNativeZoom,
-        retinaMode: RetinaMode.isHighDensity(context),
+        retinaMode: false,
         errorTileCallback: (tile, error, stack) => _reportTileError(error),
         tileProvider: _bypassTileCache
             ? OfflineMapsService.instance.directNetworkTileProvider()

@@ -201,6 +201,10 @@ PODS:
   - nearby_service (0.0.1):
     - Flutter
     - FlutterMacOS
+  - ObjectBox (4.4.1)
+  - objectbox_flutter_libs (0.0.1):
+    - Flutter
+    - ObjectBox (= 4.4.1)
   - open_filex (0.0.2):
     - Flutter
   - package_info_plus (0.4.5):
@@ -260,6 +264,9 @@ PODS:
   - wakelock_plus (0.0.1):
     - Flutter
   - WebRTC-SDK (144.7559.01)
+  - webview_flutter_wkwebview (0.0.1):
+    - Flutter
+    - FlutterMacOS
   - whisper_flutter_new (0.0.1):
     - Flutter
 
@@ -291,6 +298,7 @@ DEPENDENCIES:
   - livekit_client (from `.symlinks/plugins/livekit_client/ios`)
   - mobile_scanner (from `.symlinks/plugins/mobile_scanner/ios`)
   - nearby_service (from `.symlinks/plugins/nearby_service/darwin`)
+  - objectbox_flutter_libs (from `.symlinks/plugins/objectbox_flutter_libs/ios`)
   - open_filex (from `.symlinks/plugins/open_filex/ios`)
   - package_info_plus (from `.symlinks/plugins/package_info_plus/ios`)
   - permission_handler_apple (from `.symlinks/plugins/permission_handler_apple/ios`)
@@ -304,6 +312,7 @@ DEPENDENCIES:
   - url_launcher_ios (from `.symlinks/plugins/url_launcher_ios/ios`)
   - video_player_avfoundation (from `.symlinks/plugins/video_player_avfoundation/darwin`)
   - wakelock_plus (from `.symlinks/plugins/wakelock_plus/ios`)
+  - webview_flutter_wkwebview (from `.symlinks/plugins/webview_flutter_wkwebview/darwin`)
   - whisper_flutter_new (from `.symlinks/plugins/whisper_flutter_new/ios`)
 
 SPEC REPOS:
@@ -331,6 +340,7 @@ SPEC REPOS:
     - MLKitVision
     - MLKitXenoCommon
     - nanopb
+    - ObjectBox
     - PromisesObjC
     - Protobuf
     - SDWebImage
@@ -394,6 +404,8 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/mobile_scanner/ios"
   nearby_service:
     :path: ".symlinks/plugins/nearby_service/darwin"
+  objectbox_flutter_libs:
+    :path: ".symlinks/plugins/objectbox_flutter_libs/ios"
   open_filex:
     :path: ".symlinks/plugins/open_filex/ios"
   package_info_plus:
@@ -420,6 +432,8 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/video_player_avfoundation/darwin"
   wakelock_plus:
     :path: ".symlinks/plugins/wakelock_plus/ios"
+  webview_flutter_wkwebview:
+    :path: ".symlinks/plugins/webview_flutter_wkwebview/darwin"
   whisper_flutter_new:
     :path: ".symlinks/plugins/whisper_flutter_new/ios"
 
@@ -474,6 +488,8 @@ SPEC CHECKSUMS:
   mobile_scanner: af8f71879eaba2bbcb4d86c6a462c3c0e7f23036
   nanopb: fad817b59e0457d11a5dfbde799381cd727c1275
   nearby_service: 608702f35ef2b2f4d10b29b49c9a1bd24ae2ff03
+  ObjectBox: 7da4aceb5013d041bfafdbc6d744a26918b09757
+  objectbox_flutter_libs: 09b1dec1b4cd27bf1a5f9bae7ccaa7e43588bf31
   open_filex: 432f3cd11432da3e39f47fcc0df2b1603854eff1
   package_info_plus: af8e2ca6888548050f16fa2f1938db7b5a5df499
   permission_handler_apple: 92d754bbaa7361d436db2d6c3c1c2a0fdcec462e
@@ -494,6 +510,7 @@ SPEC CHECKSUMS:
   video_player_avfoundation: 3453f792138786248960ca029747fcd9f318ef52
   wakelock_plus: e29112ab3ef0b318e58cfa5c32326458be66b556
   WebRTC-SDK: ab9b5319e458c2bfebdc92b3600740da35d5630d
+  webview_flutter_wkwebview: 8ebf4fded22593026f7dbff1fbff31ea98573c8d
   whisper_flutter_new: 9276535665f51f845831fe94859b2cccd0334a70
 
 PODFILE CHECKSUM: dc73bec318c57799b661281b301b22e143d41c5f
