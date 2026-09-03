@@ -340,9 +340,11 @@ class _SocialPanelScreenState extends ConsumerState<SocialPanelScreen>
       );
       return;
     }
+    if (!mounted) return;
     final post = await AddReelSheet.show(context);
     if (post == null || !mounted) return;
     await SocialReelsViewer.open(context, posts: [post]);
+    if (!mounted) return;
     await _reload();
   }
 
