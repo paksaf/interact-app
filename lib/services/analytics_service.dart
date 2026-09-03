@@ -2,6 +2,9 @@
 //
 // Anonymous product analytics — batched, offline-queued, fail-soft.
 // NEVER attach userId, city, or message/reel content.
+//
+// Wire contract (POST /api/v1/analytics/events):
+//   { anonId: "<uuid>", events: [ { name, props?, ts } ] }
 
 import 'dart:async';
 import 'dart:convert';
@@ -41,16 +44,16 @@ class AnalyticsService {
   }
 
   Future<void> trackScreenView(String screen) async {
-    await _enqueue({'type': 'screen_view', 'screen': _sanitizeScreen(screen)});
+    await _enqueue('screen_view', {'screen': _sanitizeScreen(screen)});
   }
 
   Future<void> trackFeatureUse(String feature) async {
-    await _enqueue({'type': 'feature_use', 'feature': feature});
+    await _enqueue('feature_use', {'feature': feature});
   }
 
   Future<void> trackSessionStart() async {
     _sessionStartedAt = DateTime.now().toUtc();
-    await _enqueue({'type': 'session_start'});
+    await _enqueue('session_start', const {});
   }
 
   Future<void> trackSessionEnd({int? durationSec}) async {
@@ -60,11 +63,43 @@ class AnalyticsService {
             ? null
             : DateTime.now().toUtc().difference(started).inSeconds);
     _sessionStartedAt = null;
-    await _enqueue({
-      'type': 'session_end',
-      if (dur != null) 'durationSec': dur.clamp(0, 86400),
-    });
+    final props = <String, dynamic>{};
+    if (dur != null) props['durationSec'] = dur.clamp(0, 86400);
+    await _enqueue('session_end', props);
     unawaited(flush());
+  }
+
+  /// Translate one queued row → backend event shape. Handles legacy rows that
+  /// used `type` + flat keys before the wire-contract fix.
+  static Map<String, dynamic> wireEventFromQueued(Map<String, dynamic> raw) {
+    final name = (raw['name'] as String?) ?? (raw['type'] as String?);
+    if (name == null || name.isEmpty) {
+      throw ArgumentError('analytics event missing name/type');
+    }
+    final props = raw['props'] is Map
+        ? Map<String, dynamic>.from(raw['props'] as Map)
+        : <String, dynamic>{};
+    for (final key in ['screen', 'feature', 'durationSec']) {
+      if (raw.containsKey(key) && raw[key] != null) {
+        props.putIfAbsent(key, () => raw[key]);
+      }
+    }
+    return {
+      'name': name,
+      'props': props,
+      'ts': raw['ts'],
+    };
+  }
+
+  /// Build the POST body the backend expects (top-level anonId + wire events).
+  static Map<String, dynamic> buildPostBody({
+    required String anonId,
+    required List<Map<String, dynamic>> queued,
+  }) {
+    return {
+      'anonId': anonId,
+      'events': queued.map(wireEventFromQueued).toList(),
+    };
   }
 
   /// Visible for tests — trim stale rows from [raw] queue JSON.
@@ -98,14 +133,14 @@ class AnalyticsService {
     _anonId = id;
   }
 
-  Future<void> _enqueue(Map<String, dynamic> partial) async {
+  Future<void> _enqueue(String name, Map<String, dynamic> props) async {
     try {
       await _ensureAnonId();
       final prefs = await SharedPreferences.getInstance();
       final raw = _readQueue(prefs);
       raw.add({
-        ...partial,
-        'anonId': _anonId,
+        'name': name,
+        'props': props,
         'ts': DateTime.now().toUtc().toIso8601String(),
       });
       final trimmed = trimQueueForTest(
@@ -161,11 +196,14 @@ class AnalyticsService {
 
   Future<bool> _postBatch(List<Map<String, dynamic>> batch) async {
     try {
+      final anonId = _anonId;
+      if (anonId == null || anonId.isEmpty) return false;
+      final body = buildPostBody(anonId: anonId, queued: batch);
       final res = await http
           .post(
             Uri.parse('${ApiBase.current}/api/v1/analytics/events'),
             headers: const {'Content-Type': 'application/json'},
-            body: jsonEncode({'events': batch}),
+            body: jsonEncode(body),
           )
           .timeout(const Duration(seconds: 10));
       return res.statusCode >= 200 && res.statusCode < 300;

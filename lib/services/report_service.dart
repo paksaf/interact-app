@@ -17,7 +17,7 @@ enum ReportReason {
   hate('hate', 'Hate speech'),
   violence('violence', 'Violence or threats'),
   nudity('nudity', 'Nudity or sexual content'),
-  misinformation('misinformation', 'Misinformation'),
+  misinformation('misinfo', 'Misinformation'),
   other('other', 'Something else');
 
   const ReportReason(this.wire, this.label);
