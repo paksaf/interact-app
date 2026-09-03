@@ -787,8 +787,8 @@ class _CrossAppChips extends StatelessWidget {
           ),
           _MiniChip(
             icon: Icons.edit_note_outlined,
-            label: 'Pro notes',
-            onTap: () => onOpen(WelcomeDonorLinks.interactPro),
+            label: 'Notes',
+            onTap: () => context.push('/notes'),
           ),
           _MiniChip(
             icon: Icons.psychology_outlined,

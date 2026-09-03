@@ -101,6 +101,7 @@ dependencies:
   # for inbound messages outside the open chat. Background/killed-app push is
   # a later FCM add — this covers foreground/recent-background today.
   flutter_local_notifications: ^17.2.3
+  timezone: ^0.9.4
 
   # ── Native incoming-call screen (WhatsApp-style, over lock screen) ──
   # flutter_callkit_incoming shows a NATIVE full-screen incoming call even when

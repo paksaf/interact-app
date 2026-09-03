@@ -9,6 +9,8 @@
 // later FCM addition — this covers the common case now, with zero external
 // setup.
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:timezone/data/latest.dart' as tzdata;
+import 'package:timezone/timezone.dart' as tz;
 
 /// Background (bg-isolate) tap handler. Runs in a separate isolate and CANNOT
 /// navigate — cold-start / foreground tap routing is done by
@@ -34,6 +36,12 @@ class NotificationService {
 
   Future<void> init() async {
     if (_ready) return;
+    // Timezone setup for scheduled reminders. Default to Asia/Karachi (the
+    // primary market, no DST); falls back to UTC if unavailable.
+    try {
+      tzdata.initializeTimeZones();
+      tz.setLocalLocation(tz.getLocation('Asia/Karachi'));
+    } catch (_) {}
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
     const iosInit = DarwinInitializationSettings(
       requestAlertPermission: false,
@@ -105,8 +113,55 @@ class NotificationService {
     await android?.createNotificationChannel(messagesChannel);
     await android?.createNotificationChannel(quietChannel);
     await android?.createNotificationChannel(missedChannel);
+    const remindersChannel = AndroidNotificationChannel(
+      'reminders',
+      'Reminders',
+      description: 'Note reminders',
+      importance: Importance.high,
+      playSound: true,
+    );
+    await android?.createNotificationChannel(remindersChannel);
 
     _ready = true;
+  }
+
+  /// Schedule a local reminder notification at [at]. Uses inexact scheduling so
+  /// no exact-alarm permission is needed (Android 13+). Past times are ignored.
+  Future<void> scheduleReminder({
+    required int id,
+    required String title,
+    required String body,
+    required DateTime at,
+    String? payload,
+  }) async {
+    await init();
+    final when = tz.TZDateTime.from(at, tz.local);
+    if (!when.isAfter(tz.TZDateTime.now(tz.local))) return;
+    await _plugin.zonedSchedule(
+      id,
+      title,
+      body,
+      when,
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'reminders',
+          'Reminders',
+          channelDescription: 'Note reminders',
+          importance: Importance.high,
+          priority: Priority.high,
+        ),
+        iOS: DarwinNotificationDetails(),
+      ),
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+      uiLocalNotificationDateInterpretation:
+          UILocalNotificationDateInterpretation.absoluteTime,
+      payload: payload,
+    );
+  }
+
+  /// Cancel a previously scheduled reminder by its id.
+  Future<void> cancelReminder(int id) async {
+    await _plugin.cancel(id);
   }
 
   /// Route a tapped notification. Only `missed:<threadId>:<mode>` payloads are
