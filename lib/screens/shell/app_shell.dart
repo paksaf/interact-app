@@ -14,7 +14,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../core/theme/theme_prefs.dart';
 import '../../core/ui/responsive.dart';
 import '../../l10n/app_localizations.dart';
 import '../../widgets/app_background.dart';
@@ -35,7 +34,7 @@ import '../../services/location_share_service.dart';
 import '../../services/location_trace_service.dart';
 import '../../services/message_repository.dart';
 import '../../services/offline_router.dart';
-import '../../services/welcome_memory_store.dart';
+import '../../services/pending_mirror_sync.dart';
 
 class AppShell extends ConsumerStatefulWidget {
   const AppShell({super.key, required this.child});
@@ -120,8 +119,9 @@ class _AppShellState extends ConsumerState<AppShell>
     _calls.start();
     _unread = ref.read(messageWatcherProvider).unreadTotal;
     _unread.addListener(_onUnreadChanged);
-    unawaited(WelcomeMemoryStore.instance.flushPendingIlSync());
-    unawaited(ref.read(themeControllerProvider.notifier).syncWithServerOnOpen());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(PendingMirrorSync.onAppOpen(ref, force: true));
+    });
   }
 
   late final CallSignaling _calls;
@@ -137,8 +137,8 @@ class _AppShellState extends ConsumerState<AppShell>
     if (state == AppLifecycleState.resumed) {
       unawaited(OutboxService.instance.flush());
       _calls.checkNow();
-      // Re-announce presence immediately so peers see us online on return.
       ref.read(presenceServiceProvider).beatNow();
+      unawaited(PendingMirrorSync.onAppResume(ref));
     }
   }
 

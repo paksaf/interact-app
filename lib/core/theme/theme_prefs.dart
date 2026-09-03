@@ -5,6 +5,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -159,11 +160,21 @@ class ThemeController extends Notifier<AppThemeState> {
 
   Future<void> flushPendingPush() async {
     final prefs = ref.read(themePrefsProvider);
-    if (prefs == null || !prefs.syncPending) return;
+    final state = prefs?.state ?? this.state;
+
+    if (prefs != null && !prefs.syncPending) return;
+
+    // Also flush when prefs not loaded yet but SP flag was set optimistically.
+    if (prefs == null) {
+      final sp = await SharedPreferences.getInstance();
+      if (!(sp.getBool(ThemePrefs.syncPendingKey) ?? false)) return;
+    }
 
     final result = await TalkThemeSyncService.instance.pushFull(state);
     if (!result.pending) {
-      await prefs.setSyncPending(false);
+      await _setSyncPending(false);
+    } else if (kDebugMode) {
+      debugPrint('[ThemeController] theme PUT still pending (${result.httpStatus})');
     }
   }
 
@@ -208,23 +219,53 @@ class ThemeController extends Notifier<AppThemeState> {
   }
 
   Future<void> _persist(AppThemeState next, {bool pushRemote = true}) async {
-    final prefs = ref.read(themePrefsProvider);
-    if (prefs != null) await prefs.save(next);
+    await _saveLocal(next);
     state = next;
 
     if (!pushRemote) return;
 
+    await _setSyncPending(true);
     unawaited(_pushThemeBestEffort(next));
   }
 
-  Future<void> _pushThemeBestEffort(AppThemeState next) async {
+  Future<void> _saveLocal(AppThemeState next) async {
     final prefs = ref.read(themePrefsProvider);
+    if (prefs != null) {
+      await prefs.save(next);
+      return;
+    }
+    final sp = await SharedPreferences.getInstance();
+    final modeStr = switch (next.mode) {
+      ThemeMode.light => 'light',
+      ThemeMode.dark => 'dark',
+      ThemeMode.system => 'system',
+    };
+    await sp.setString(ThemePrefs.modeKey, modeStr);
+    await sp.setInt(ThemePrefs.seedKey, next.seed.toARGB32());
+    await sp.setInt(ThemePrefs.accentKey, next.accent.toARGB32());
+    await sp.setString(ThemePrefs.presetKey, next.presetId);
+  }
+
+  Future<void> _setSyncPending(bool value) async {
+    final prefs = ref.read(themePrefsProvider);
+    if (prefs != null) {
+      await prefs.setSyncPending(value);
+      return;
+    }
+    final sp = await SharedPreferences.getInstance();
+    await sp.setBool(ThemePrefs.syncPendingKey, value);
+  }
+
+  Future<void> _pushThemeBestEffort(AppThemeState next) async {
     final result = await TalkThemeSyncService.instance.pushFull(next);
-    if (prefs == null) return;
-    if (result.pending) {
-      await prefs.setSyncPending(true);
+    if (!result.pending) {
+      await _setSyncPending(false);
+      if (kDebugMode) debugPrint('[ThemeController] theme PUT ok');
     } else {
-      await prefs.setSyncPending(false);
+      await _setSyncPending(true);
+      if (kDebugMode) {
+        debugPrint('[ThemeController] theme PUT pending (${result.httpStatus})');
+      }
     }
   }
 }

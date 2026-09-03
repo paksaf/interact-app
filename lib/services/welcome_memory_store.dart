@@ -10,6 +10,17 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'il_schedule_sync_service.dart';
 
+/// Reminders that still need an IL POST (unit-testable).
+List<WelcomeReminder> pendingIlReminders(
+  Iterable<WelcomeReminder> reminders, {
+  int maxItems = WelcomeMemoryStore.flushMaxItems,
+}) {
+  return reminders
+      .where((r) => r.syncPending && (r.ilTaskId == null || r.ilTaskId!.isEmpty))
+      .take(maxItems)
+      .toList();
+}
+
 class WelcomeReminder {
   const WelcomeReminder({
     required this.id,
@@ -121,6 +132,9 @@ class WelcomeMemoryStore {
 
   static const _flushMax = 5;
 
+  /// Max reminders retried per flush (visible to pending_mirror_sync tests).
+  static const flushMaxItems = _flushMax;
+
   Future<WelcomeMemory> recordAppOpen() async {
     final prefs = await SharedPreferences.getInstance();
     final today = _dayKey(DateTime.now());
@@ -170,16 +184,13 @@ class WelcomeMemoryStore {
   }
 
   /// Retry pending IL mirrors — bounded, non-blocking. Call at app open.
-  Future<void> flushPendingIlSync({int maxItems = _flushMax}) async {
+  Future<int> flushPendingIlSync({int maxItems = _flushMax}) async {
     final prefs = await SharedPreferences.getInstance();
     final mem = await _read(prefs);
-    final pending = mem.reminders
-        .where((r) => r.syncPending && (r.ilTaskId == null || r.ilTaskId!.isEmpty))
-        .take(maxItems)
-        .toList();
-    if (pending.isEmpty) return;
+    final pending = pendingIlReminders(mem.reminders, maxItems: maxItems);
+    if (pending.isEmpty) return 0;
 
-    var changed = false;
+    var syncedCount = 0;
     final updated = [...mem.reminders];
     for (final r in pending) {
       final idx = updated.indexWhere((x) => x.id == r.id);
@@ -187,12 +198,16 @@ class WelcomeMemoryStore {
       final synced = await _trySyncReminder(r);
       if (synced != null) {
         updated[idx] = synced;
-        changed = true;
+        syncedCount++;
       }
     }
-    if (changed) {
+    if (syncedCount > 0) {
       await _writeReminders(prefs, updated);
     }
+    if (kDebugMode && syncedCount > 0) {
+      debugPrint('[WelcomeMemory] IL flush synced $syncedCount reminder(s)');
+    }
+    return syncedCount;
   }
 
   void _mirrorReminderBestEffort(WelcomeReminder reminder) {
@@ -221,7 +236,7 @@ class WelcomeMemoryStore {
     if (result.taskId != null) {
       return r.copyWith(ilTaskId: result.taskId, syncPending: false);
     }
-    return r.copyWith(syncPending: true);
+    return null;
   }
 
   Future<void> _writeReminders(
