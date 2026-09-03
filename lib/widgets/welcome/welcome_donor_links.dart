@@ -12,5 +12,5 @@ class WelcomeDonorLinks {
       Uri.parse('https://lifestyle.interactpak.com/goals');
   static Uri get execOs => Uri.parse('https://execute.interactpak.com');
   static Uri get interactPro => Uri.parse('interactpro://open?path=/notes');
-  static Uri get zeka => Uri.parse('https://www.interactpak.com/zeka');
+  static Uri get zeka => Uri.parse('https://qurbanisahulat.com/zeka');
 }

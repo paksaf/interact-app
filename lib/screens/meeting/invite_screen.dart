@@ -7,8 +7,15 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../../services/talk_api.dart';
+
+// Room codes use the full A–Z 0–9 alphabet (server-generated). The old
+// formatter dropped 0 and 1, so a code like "A1B2C3" could never reach six
+// characters and Join stayed disabled.
+final _codeChars = RegExp(r'[A-Z0-9]');
+final _codeInLink = RegExp(r'([A-Z0-9]{6})');
 
 class InviteScreen extends ConsumerStatefulWidget {
   const InviteScreen({super.key});
@@ -21,23 +28,90 @@ class _InviteScreenState extends ConsumerState<InviteScreen> {
   bool _busy = false;
   String? _error;
 
+  // Camera permission gate — avoids MobileScanner's raw "unexpected error"
+  // when permission is missing, which is the common cause on first open.
+  bool _camChecked = false;
+  bool _camGranted = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ensureCamera();
+  }
+
+  Future<void> _ensureCamera() async {
+    final status = await Permission.camera.request();
+    if (!mounted) return;
+    setState(() {
+      _camGranted = status.isGranted;
+      _camChecked = true;
+    });
+  }
+
+  @override
+  void dispose() {
+    _codeCtrl.dispose();
+    super.dispose();
+  }
+
   Future<void> _join(String code) async {
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
-      // We don't need the token here — the meeting room calls TalkApi
-      // again itself with the same code. We only validate the code
-      // resolves to a real room before pushing.
+      // We only validate the code resolves to a real room before pushing;
+      // the meeting room mints its own token with the same code.
       await ref.read(talkApiProvider).joinRoom(code);
       if (!mounted) return;
       context.go('/room?code=$code');
     } catch (e) {
-      setState(() => _error = '$e');
+      if (mounted) setState(() => _error = '$e');
     } finally {
-      setState(() => _busy = false);
+      if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Widget _scanner() {
+    if (!_camChecked) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (!_camGranted) {
+      return Container(
+        color: Colors.black,
+        alignment: Alignment.center,
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.no_photography_outlined,
+                color: Colors.white70, size: 40),
+            const SizedBox(height: 12),
+            const Text(
+              'Camera access is off, so QR scanning is unavailable.\nYou can still type the code above.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white70),
+            ),
+            const SizedBox(height: 12),
+            TextButton(
+              onPressed: openAppSettings,
+              child: const Text('Open settings'),
+            ),
+          ],
+        ),
+      );
+    }
+    return MobileScanner(
+      onDetect: (cap) {
+        final v = cap.barcodes.firstOrNull?.rawValue;
+        if (v == null) return;
+        // Accept either a bare code or a .../j/CODE deep link.
+        final m = _codeInLink.firstMatch(v.toUpperCase());
+        if (m == null || _busy) return;
+        _codeCtrl.text = m.group(1)!;
+        _join(m.group(1)!);
+      },
+    );
   }
 
   @override
@@ -61,7 +135,7 @@ class _InviteScreenState extends ConsumerState<InviteScreen> {
                 autofocus: true,
                 textCapitalization: TextCapitalization.characters,
                 inputFormatters: [
-                  FilteringTextInputFormatter.allow(RegExp(r'[A-Z2-9]')),
+                  FilteringTextInputFormatter.allow(_codeChars),
                   LengthLimitingTextInputFormatter(6),
                 ],
                 onChanged: (_) => setState(() {}),
@@ -100,17 +174,7 @@ class _InviteScreenState extends ConsumerState<InviteScreen> {
                 height: 240,
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(12),
-                  child: MobileScanner(
-                    onDetect: (cap) {
-                      final v = cap.barcodes.firstOrNull?.rawValue;
-                      if (v == null) return;
-                      // Accept either bare code or a https://talk.interactpak.com/j/CODE link
-                      final m = RegExp(r'([A-Z2-9]{6})').firstMatch(v);
-                      if (m == null) return;
-                      _codeCtrl.text = m.group(1)!;
-                      _join(m.group(1)!);
-                    },
-                  ),
+                  child: _scanner(),
                 ),
               ),
               if (_error != null) ...[

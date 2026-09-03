@@ -1591,6 +1591,14 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
       backgroundColor: Colors.transparent,
       appBar: AppBar(
         titleSpacing: 0,
+        // Always give a way out of a thread: back to the previous screen when
+        // there is one, otherwise straight to the app home (#chat-nav).
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          tooltip: 'Back',
+          onPressed: () =>
+              context.canPop() ? context.pop() : context.go('/'),
+        ),
         title: Row(
           children: [
             CircleAvatar(
