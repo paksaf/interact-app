@@ -80,6 +80,8 @@ import 'services/callkit_service.dart';
 import 'services/notification_service.dart';
 import 'services/api_base.dart';
 import 'services/local_message_store.dart';
+import 'services/analytics_service.dart';
+import 'services/talk_route_observer.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -89,6 +91,7 @@ Future<void> main() async {
   // verify it in the background (see services/api_base.dart).
   await ApiBase.init();
   await OfflineMapsService.instance.init();
+  await AnalyticsService.instance.ensureStarted();
   // FCM for background/killed call ring. Fail-soft: if google-services.json /
   // Firebase isn't configured yet, the app still runs (ring stays foreground-only).
   // Lifestyle donor: register the background handler BEFORE runApp.
@@ -183,6 +186,7 @@ String? _normalizeTalkDeepLink(Uri u) => TalkDeepLinkRouter.routeFor(u);
 /// paste live OUTSIDE the shell (full-screen).
 final _router = GoRouter(
   navigatorKey: _rootNavKey,
+  observers: [TalkRouteObserver.instance],
   initialLocation: '/',
   // A server-side refresh-token REVOKE (or explicit sign-out) flips this
   // notifier; the redirect below then boots the user to sign-in from wherever

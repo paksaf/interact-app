@@ -35,6 +35,8 @@ import '../../services/location_trace_service.dart';
 import '../../services/message_repository.dart';
 import '../../services/offline_router.dart';
 import '../../services/pending_mirror_sync.dart';
+import '../../services/analytics_service.dart';
+import '../../services/talk_route_observer.dart';
 
 class AppShell extends ConsumerStatefulWidget {
   const AppShell({super.key, required this.child});
@@ -59,11 +61,30 @@ class _AppShellState extends ConsumerState<AppShell>
 
   int _outboxPending = 0;
   StreamSubscription<int>? _outboxSub;
+  String? _lastTrackedPath;
+  DateTime? _pausedAt;
+  GoRouter? _goRouter;
+  VoidCallback? _routerListener;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    unawaited(AnalyticsService.instance.trackSessionStart());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _goRouter = GoRouter.of(context);
+      _routerListener = () {
+        final path =
+            _goRouter!.routerDelegate.currentConfiguration.uri.path;
+        if (path != _lastTrackedPath) {
+          _lastTrackedPath = path;
+          trackShellPath(path);
+        }
+      };
+      _goRouter!.routerDelegate.addListener(_routerListener!);
+      _routerListener!();
+    });
     // Defer to first frame so a ScaffoldMessenger exists; failures are silent.
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkForUpdate());
     // Presence heartbeat → QS /api/v1/talk/presence/beat (TalkPresence table).
@@ -136,9 +157,20 @@ class _AppShellState extends ConsumerState<AppShell>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(OutboxService.instance.flush());
+      unawaited(AnalyticsService.instance.flush());
       _calls.checkNow();
       ref.read(presenceServiceProvider).beatNow();
       unawaited(PendingMirrorSync.onAppResume(ref));
+      if (_pausedAt != null) {
+        final away = DateTime.now().difference(_pausedAt!).inSeconds;
+        if (away > 300) {
+          unawaited(AnalyticsService.instance.trackSessionStart());
+        }
+        _pausedAt = null;
+      }
+    } else if (state == AppLifecycleState.paused) {
+      _pausedAt = DateTime.now();
+      unawaited(AnalyticsService.instance.trackSessionEnd());
     }
   }
 
@@ -168,6 +200,13 @@ class _AppShellState extends ConsumerState<AppShell>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    final listener = _routerListener;
+    final router = _goRouter;
+    if (listener != null && router != null) {
+      router.routerDelegate.removeListener(listener);
+    }
+    unawaited(AnalyticsService.instance.trackSessionEnd());
+    AnalyticsService.instance.stop();
     _outboxSub?.cancel();
     _unread.removeListener(_onUnreadChanged);
     ref.read(presenceServiceProvider).stop();
