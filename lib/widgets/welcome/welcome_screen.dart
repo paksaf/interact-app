@@ -800,6 +800,11 @@ class _CrossAppChips extends StatelessWidget {
             label: 'Help',
             onTap: () => context.push('/help'),
           ),
+          _MiniChip(
+            icon: Icons.cloud_outlined,
+            label: 'Storage',
+            onTap: () => context.push('/storage'),
+          ),
         ],
       ),
     );
