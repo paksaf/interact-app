@@ -114,6 +114,40 @@ class SocialReelsApi {
     );
   }
 
+  /// GET /api/v1/reels/[reelId] — public fetch for share / deep links.
+  Future<SocialPost?> fetchReelById(String reelId) async {
+    if (!_uuidRe.hasMatch(reelId)) return null;
+    try {
+      final res = await http
+          .get(
+            Uri.parse('$_base/api/v1/reels/$reelId'),
+            headers: await _headers(auth: true),
+          )
+          .timeout(const Duration(seconds: 12));
+      if (res.statusCode != 200) return null;
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      if (body['success'] != true) return null;
+      final data = body['data'];
+      if (data is! Map) return null;
+      final reel = data['reel'];
+      if (reel is! Map) return null;
+      final authorId = (data['authorId'] as String?) ?? '';
+      if (authorId.isEmpty) return null;
+      final authorName =
+          (reel['authorName'] as String?)?.trim().isNotEmpty == true
+              ? (reel['authorName'] as String).trim()
+              : 'User';
+      return _reelJsonToPost(
+        reel.cast<String, dynamic>(),
+        authorId: authorId,
+        authorName: authorName,
+      );
+    } catch (e) {
+      if (kDebugMode) debugPrint('[SocialReelsApi] fetchReelById: $e');
+      return null;
+    }
+  }
+
   /// Fetch reels for [userId]. Uses /me/reels when [userId] is the signed-in user.
   Future<List<SocialPost>> fetchReelsAsPosts({
     required String userId,

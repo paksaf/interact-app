@@ -91,7 +91,8 @@
                      <application> above. -->
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER"/>
             </intent-filter>
-            <!-- Deep link: interact://j/<CODE> + https://talk.interactpak.com/j/<CODE> -->
+            <!-- Deep link: interact://j/<CODE>, interact://talk/reel/<id>,
+                 https://talk.interactpak.com/j/<CODE>, /reel/<id> -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
@@ -106,6 +107,15 @@
                     android:scheme="https"
                     android:host="talk.interactpak.com"
                     android:pathPrefix="/j"/>
+            </intent-filter>
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data
+                    android:scheme="https"
+                    android:host="talk.interactpak.com"
+                    android:pathPrefix="/reel"/>
             </intent-filter>
         </activity>
         <meta-data

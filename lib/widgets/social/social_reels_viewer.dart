@@ -15,6 +15,7 @@ import '../../models/social_post.dart';
 import '../../services/auth_service.dart';
 import '../../services/social_engagement_service.dart';
 import '../../utils/chat_formatters.dart';
+import '../../utils/talk_reel_urls.dart';
 import '../user_avatar.dart';
 import 'reel_embed_webview.dart';
 
@@ -156,7 +157,7 @@ class _SocialReelsViewerState extends State<SocialReelsViewer> {
     if (reelId == null) return;
     final url = _post.shareUrl?.isNotEmpty == true
         ? _post.shareUrl!
-        : 'https://qurbanisahulat.com';
+        : talkReelShareUrl(reelId);
     final result = await Share.share(
       '${_post.authorName} on INTERACT\n$url',
       subject: _post.titleOrBody,

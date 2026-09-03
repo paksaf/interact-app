@@ -63,6 +63,9 @@ import 'screens/offline/offline_hub_screen.dart';
 import 'screens/location/location_trace_screen.dart';
 import 'screens/social/find_friends_screen.dart';
 import 'screens/social/social_panel_screen.dart';
+import 'screens/social/reel_deep_link_screen.dart';
+import 'core/talk_deep_link_router.dart';
+import 'core/talk_deep_link_service.dart';
 import 'screens/lora/lora_bridge_screen.dart';
 import 'screens/iot/iot_comms_screen.dart';
 import 'screens/mesh/nearby_mesh_screen.dart';
@@ -170,38 +173,7 @@ Future<void> _handleCallBack(String threadId, String mode) async {
 
 /// Map Android deep-link URIs → in-app paths. Returns null if [u] is already
 /// a normal in-app location.
-String? _normalizeTalkDeepLink(Uri u) {
-  // interact://j/<CODE>
-  if (u.scheme == 'interact' && u.host == 'j') {
-    final code = u.pathSegments.isNotEmpty
-        ? u.pathSegments.first
-        : u.path.replaceAll('/', '');
-    if (code.isNotEmpty) return '/j/${code.toUpperCase()}';
-  }
-  // interact:///j/<CODE> (empty host)
-  if (u.scheme == 'interact' && u.path.startsWith('/j/')) {
-    final code = u.path.substring(3).split('/').first;
-    if (code.isNotEmpty) return '/j/${code.toUpperCase()}';
-  }
-  // https://talk.interactpak.com/j/<CODE>
-  if ((u.scheme == 'https' || u.scheme == 'http') &&
-      (u.host == 'talk.interactpak.com' || u.host == 'interactpak.com')) {
-    if (u.path.startsWith('/j/')) {
-      final code = u.path.substring(3).split('/').first;
-      if (code.isNotEmpty) {
-        if (code.toUpperCase() == 'LOC' &&
-            u.queryParameters['lat'] != null &&
-            u.queryParameters['lng'] != null) {
-          return '/j/LOC?lat=${u.queryParameters['lat']}&lng=${u.queryParameters['lng']}';
-        }
-        return '/j/${code.toUpperCase()}';
-      }
-    }
-    if (u.path.isEmpty || u.path == '/') return '/';
-    return u.path;
-  }
-  return null;
-}
+String? _normalizeTalkDeepLink(Uri u) => TalkDeepLinkRouter.routeFor(u);
 
 /// Routes — ShellRoute hosts the bottom-nav scaffold so the tab
 /// switcher persists across pushes. Sign-in + meeting room + invite
@@ -388,6 +360,11 @@ final _router = GoRouter(
     GoRoute(path: '/invite', builder: (_, __) => const InviteScreen()),
     GoRoute(path: '/find-friends', builder: (_, __) => const FindFriendsScreen()),
     GoRoute(path: '/social-panel', builder: (_, __) => const SocialPanelScreen()),
+    GoRoute(
+      path: '/reel/:id',
+      builder: (_, st) =>
+          ReelDeepLinkScreen(reelId: st.pathParameters['id'] ?? ''),
+    ),
     GoRoute(path: '/dialpad', builder: (_, __) => const DialPadScreen()),
     GoRoute(
         path: '/call-history',
@@ -589,6 +566,8 @@ class _GateState extends ConsumerState<_Gate> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await TalkDeepLinkService.instance.init((loc) => _router.go(loc));
+
       final auth = ref.read(authServiceProvider);
       // Offline-durable resume: valid token → in; refresh succeeds → in;
       // OFFLINE (no server) but we hold a refresh token → STAY in (cached
@@ -597,12 +576,18 @@ class _GateState extends ConsumerState<_Gate> {
       final outcome = await auth.attemptSilentResume();
       if (!mounted) return;
 
+      final pending = TalkDeepLinkService.instance.takePendingLocation();
+      if (pending != null && pending.startsWith('/reel/')) {
+        context.go(pending);
+        return;
+      }
+
       if (outcome == RefreshOutcome.refreshed ||
           outcome == RefreshOutcome.offlineKeep) {
         // Navigate FIRST — never block cold-start on network / plugin init.
         // (A hung /me call or CallKit permission dialog looked like
         // splash-then-close on slower phones with a truncated APK.)
-        context.go('/calls');
+        context.go(pending ?? '/calls');
 
         // Background: establish refresh credential (backward-compat migration
         // for legacy 8h sessions), sync credentials + push/CallKit — all

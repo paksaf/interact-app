@@ -70,6 +70,9 @@ dependencies:
   # ── External URLs (Forgejo / license / open-source links) ──────────
   url_launcher: ^6.2.5
 
+  # ── Deep links (reels, join codes) — Maps / Lifestyle donor pattern ─
+  app_links: ^6.4.0
+
   # ── In-app Gateway Console embed (2026-09-02) ───────────────────────
   # Managers re-link a country's WhatsApp line (QR / pairing code) or check
   # SMS health from the phone via gateway_console_screen.dart. onHttpAuthRequest
