@@ -119,6 +119,14 @@ class _FriendsMapScreenState extends ConsumerState<FriendsMapScreen> {
         for (final f in _fixes) LatLng(f.lat, f.lng),
       ];
 
+  void _zoomBy(double delta) {
+    final cam = _map.camera;
+    final target = (cam.zoom + delta)
+        .clamp(kFriendMapMinZoom, kFriendMapMaxZoom)
+        .toDouble();
+    _map.move(cam.center, target);
+  }
+
   void _fitToEverything() {
     final pts = _allPoints;
     if (pts.isEmpty) return;
@@ -237,6 +245,9 @@ class _FriendsMapScreenState extends ConsumerState<FriendsMapScreen> {
               initialZoom: _fixes.isEmpty && _myPos == null ? 4 : 14,
               minZoom: kFriendMapMinZoom,
               maxZoom: kFriendMapMaxZoom,
+              interactionOptions: const InteractionOptions(
+                flags: InteractiveFlag.all,
+              ),
               onMapReady: () {
                 if (!_fittedOnce) _fitToEverything();
               },
@@ -245,6 +256,27 @@ class _FriendsMapScreenState extends ConsumerState<FriendsMapScreen> {
               _basemapLayer(context),
               MarkerLayer(markers: _buildMarkers(cs)),
             ],
+          ),
+          // On-screen zoom controls — a guaranteed way to zoom in/out even if
+          // pinch gestures are unreliable on a given device.
+          Positioned(
+            right: 12,
+            bottom: 96,
+            child: Column(
+              children: [
+                FloatingActionButton.small(
+                  heroTag: 'friendmap_zoom_in',
+                  onPressed: () => _zoomBy(1),
+                  child: const Icon(Icons.add),
+                ),
+                const SizedBox(height: 8),
+                FloatingActionButton.small(
+                  heroTag: 'friendmap_zoom_out',
+                  onPressed: () => _zoomBy(-1),
+                  child: const Icon(Icons.remove),
+                ),
+              ],
+            ),
           ),
           // Attribution (Carto/OSM tile terms).
           Positioned(
