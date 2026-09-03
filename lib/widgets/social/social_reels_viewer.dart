@@ -13,10 +13,12 @@ import 'package:video_player/video_player.dart';
 
 import '../../models/social_post.dart';
 import '../../services/auth_service.dart';
+import '../../services/report_service.dart';
 import '../../services/social_engagement_service.dart';
 import '../../utils/chat_formatters.dart';
 import '../../utils/talk_reel_urls.dart';
 import '../user_avatar.dart';
+import '../report/report_reason_sheet.dart';
 import 'reel_embed_webview.dart';
 
 class SocialReelsViewer extends StatefulWidget {
@@ -132,6 +134,31 @@ class _SocialReelsViewerState extends State<SocialReelsViewer> {
           _index,
           before.copyWithEngagement(liked: res.liked, likeCount: res.likeCount),
         ));
+  }
+
+  Future<void> _reportReel() async {
+    final reelId = _post.engagementReelId;
+    if (reelId == null) return;
+    if (!mounted) return;
+    final ok = await showReportReasonSheet(
+      context,
+      subjectLabel: 'reel',
+      onSubmit: (reason, note) => ReportService.instance.reportReel(
+        reelId: reelId,
+        reason: reason,
+        note: note,
+      ),
+    );
+    if (!mounted) return;
+    if (ok == true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Report submitted — thank you')),
+      );
+    } else if (ok == false) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not submit report — try again later')),
+      );
+    }
   }
 
   Future<void> _openComments() async {
@@ -311,7 +338,7 @@ class _SocialReelsViewerState extends State<SocialReelsViewer> {
             _togglePause();
           }
         },
-        onLongPress: _togglePause,
+        onLongPress: _reportReel,
         child: Stack(
           fit: StackFit.expand,
           children: [
@@ -386,6 +413,7 @@ class _SocialReelsViewerState extends State<SocialReelsViewer> {
                   onLike: _toggleLike,
                   onComment: _openComments,
                   onShare: _shareReel,
+                  onReport: _reportReel,
                 ),
               ),
             if (_post.body.isNotEmpty)
@@ -440,12 +468,14 @@ class _EngagementRail extends StatelessWidget {
     required this.onLike,
     required this.onComment,
     required this.onShare,
+    required this.onReport,
   });
 
   final SocialPost post;
   final VoidCallback onLike;
   final VoidCallback onComment;
   final VoidCallback onShare;
+  final VoidCallback onReport;
 
   @override
   Widget build(BuildContext context) {
@@ -475,6 +505,12 @@ class _EngagementRail extends StatelessWidget {
           icon: Icons.visibility_outlined,
           label: _fmt(post.viewCount),
           onTap: () {},
+        ),
+        const SizedBox(height: 18),
+        _RailButton(
+          icon: Icons.flag_outlined,
+          label: 'Report',
+          onTap: onReport,
         ),
       ],
     );

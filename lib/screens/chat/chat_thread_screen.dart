@@ -26,7 +26,10 @@ import 'package:video_player/video_player.dart';
 
 import 'package:sahulat_common/sahulat_common.dart';
 
+import '../../core/chat/message_markup.dart';
 import '../../core/l10n/locale_prefs.dart';
+import '../../services/analytics_service.dart';
+import '../../services/report_service.dart';
 import '../../l10n/app_localizations.dart';
 import '../../core/offline/message_delivery_state.dart';
 import '../../models/chat.dart';
@@ -54,6 +57,10 @@ import '../../widgets/chat/offline_chat_banner.dart';
 import '../../widgets/chat/location_pin_bubble.dart';
 import '../../widgets/chat/offline_peer_sheet.dart';
 import '../../widgets/chat/chat_wallpaper_layer.dart';
+import '../../widgets/chat/composer_emoji_sheet.dart';
+import '../../widgets/chat/drawing_signature_sheet.dart';
+import '../../widgets/chat/rich_message_text.dart';
+import '../../widgets/report/report_reason_sheet.dart';
 import '../../widgets/sms_fallback_sheet.dart';
 import '../settings/chat_wallpaper_settings_screen.dart';
 import 'chat_ai_actions.dart';
@@ -411,6 +418,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
         await ref.read(callSignalingProvider).ring(widget.thread.id, mode);
     if (!mounted) return;
     context.push(roomUri(inviteId: inviteId));
+    AnalyticsService.instance.trackFeatureUse('call_start');
   }
 
   /// Group actions (add member / leave) — group threads only.
@@ -754,6 +762,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
         await _refresh();
         _scrollToBottom();
       }
+      AnalyticsService.instance.trackFeatureUse('chat_send');
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -906,6 +915,12 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
           shrinkWrap: true,
           children: [
             ListTile(
+              leading: const Icon(Icons.draw_outlined),
+              title: const Text('Draw or sign'),
+              subtitle: const Text('Sketch → PNG attachment'),
+              onTap: () => Navigator.pop(ctx, 'draw'),
+            ),
+            ListTile(
               leading: const Icon(Icons.photo_camera_outlined),
               title: const Text('Camera'),
               subtitle: const Text('Capture with Talk camera'),
@@ -963,6 +978,10 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
     // the existing CameraEffectsScreen and stop the attachment flow here.
     if (choice == 'camera-fx') {
       context.push('/camera-effects');
+      return;
+    }
+    if (choice == 'draw') {
+      await _sendDrawingAttachment();
       return;
     }
 
@@ -1106,6 +1125,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
         await _refresh();
       }
       _scrollToBottom();
+      AnalyticsService.instance.trackFeatureUse('chat_attach');
     } catch (e) {
       debugPrint('[attach] failed: $e — queueing locally');
       if (!mounted) return;
@@ -1150,6 +1170,52 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
       // _sending is only ever set true inside this block, so the finally
       // guarantees it can never get stuck (all earlier early-returns happen
       // before it is set).
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  /// Drawing / signature sheet → PNG → media/upload → attachment message.
+  Future<void> _sendDrawingAttachment() async {
+    if (_sending) return;
+    final cloudOk = await ChatMediaPolicy.canUploadToCloud();
+    if (!cloudOk) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text(ChatMediaPolicy.offlineMediaMessage)),
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
+    final file = await DrawingSignatureSheet.show(context);
+    if (file == null || !mounted) return;
+    setState(() => _sending = true);
+    final caption = _textCtrl.text.trim();
+    try {
+      final up = await ref.read(chatApiProvider).uploadMedia(file);
+      final sent = await ref.read(chatApiProvider).sendAttachment(
+            widget.thread.id,
+            url: up.url,
+            caption: caption,
+          );
+      _textCtrl.clear();
+      if (sent.pending) {
+        setState(() {
+          _latestMessages = [..._latestMessages, sent];
+          _messages = Future.value(_latestMessages);
+        });
+      } else {
+        await _refresh();
+      }
+      _scrollToBottom();
+      AnalyticsService.instance.trackFeatureUse('chat_attach');
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Drawing send failed: $e')),
+        );
+      }
+    } finally {
       if (mounted) setState(() => _sending = false);
     }
   }
@@ -1242,6 +1308,29 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
     } catch (_) {/* best-effort — overlay is non-critical */}
   }
 
+  Future<void> _reportMessage(Message m) async {
+    final ok = await showReportReasonSheet(
+      context,
+      subjectLabel: 'message',
+      onSubmit: (reason, note) => ReportService.instance.reportMessage(
+        threadId: widget.thread.id,
+        messageId: m.id,
+        reason: reason,
+        note: note,
+      ),
+    );
+    if (!mounted) return;
+    if (ok == true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Report submitted — thank you')),
+      );
+    } else if (ok == false) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not submit report — try again later')),
+      );
+    }
+  }
+
   Future<void> _toggleDictate() async {
     final stt = TalkSttService.instance;
     if (_dictating) {
@@ -1305,7 +1394,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
   }
 
   Future<void> _readAloud(Message m) async {
-    final body = m.body.trim();
+    final body = stripMessageMarkup(m.body.trim());
     if (body.isEmpty) return;
     final tts = TalkTtsService.instance;
     if (tts.isSpeaking) {
@@ -1332,7 +1421,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
       context: context,
       showDragHandle: true,
       builder: (ctx) {
-        const emojis = ['👍', '❤️', '😂', '🙏', '😮', '😢'];
+        const emojis = kTapbackEmojis;
         return SafeArea(
           top: false,
           child: Column(
@@ -1340,18 +1429,20 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
             children: [
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: emojis
-                      .map((e) => InkWell(
-                            borderRadius: BorderRadius.circular(32),
-                            onTap: () => Navigator.pop(ctx, 'react:$e'),
-                            child: Padding(
-                              padding: const EdgeInsets.all(10),
-                              child: Text(e, style: const TextStyle(fontSize: 26)),
-                            ),
-                          ))
-                      .toList(),
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: emojis
+                        .map((e) => InkWell(
+                              borderRadius: BorderRadius.circular(32),
+                              onTap: () => Navigator.pop(ctx, 'react:$e'),
+                              child: Padding(
+                                padding: const EdgeInsets.all(10),
+                                child: Text(e, style: const TextStyle(fontSize: 26)),
+                              ),
+                            ))
+                        .toList(),
+                  ),
                 ),
               ),
               const Divider(height: 1),
@@ -1387,12 +1478,22 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
                   title: const Text('Delete for everyone'),
                   onTap: () => Navigator.pop(ctx, 'delete'),
                 ),
+              if (!m.isMine)
+                ListTile(
+                  leading: const Icon(Icons.flag_outlined),
+                  title: const Text('Report'),
+                  onTap: () => Navigator.pop(ctx, 'report'),
+                ),
             ],
           ),
         );
       },
     );
     if (action == null || !mounted) return;
+    if (action == 'report') {
+      await _reportMessage(m);
+      return;
+    }
     if (action.startsWith('react:')) {
       await _toggleReaction(m, action.substring(6));
       return;
@@ -1969,7 +2070,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
                         children: [
                           Text('Replying to ${r.senderName}',
                               style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: cs.primary)),
-                          Text(r.body.isNotEmpty ? r.body : '📎 attachment',
+                          Text(r.body.isNotEmpty ? messagePlainPreview(r.body) : '📎 attachment',
                               maxLines: 1, overflow: TextOverflow.ellipsis,
                               style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
                         ],
@@ -1996,6 +2097,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
             onAttach: _pickAndSendAttachment,
             onSchedule: _scheduleSend,
             onDictate: _toggleDictate,
+            onDraw: _sendDrawingAttachment,
           ),
           ],
         ],
@@ -2149,7 +2251,10 @@ class _MessageBubble extends StatelessWidget {
                       if (message.body.trim().isNotEmpty)
                         Padding(
                           padding: const EdgeInsets.only(top: 6),
-                          child: Text(message.body, style: TextStyle(color: fg)),
+                          child: RichMessageText(
+                            text: message.body,
+                            style: TextStyle(color: fg),
+                          ),
                         ),
                     ] else ...[
                       Builder(
@@ -2162,7 +2267,10 @@ class _MessageBubble extends StatelessWidget {
                               mutedForeground: fg.withValues(alpha: 0.75),
                             );
                           }
-                          return Text(message.body, style: TextStyle(color: fg));
+                          return RichMessageText(
+                            text: message.body,
+                            style: TextStyle(color: fg),
+                          );
                         },
                       ),
                     ],
@@ -2655,7 +2763,7 @@ class _InlineVideoState extends State<_InlineVideo> {
   }
 }
 
-class _Composer extends StatelessWidget {
+class _Composer extends StatefulWidget {
   const _Composer({
     required this.controller,
     required this.sending,
@@ -2669,6 +2777,7 @@ class _Composer extends StatelessWidget {
     required this.onAttach,
     required this.onSchedule,
     required this.onDictate,
+    required this.onDraw,
   });
   final TextEditingController controller;
   final bool sending;
@@ -2682,12 +2791,20 @@ class _Composer extends StatelessWidget {
   final VoidCallback onAttach;
   final VoidCallback onSchedule;
   final VoidCallback onDictate;
+  final VoidCallback onDraw;
+
+  @override
+  State<_Composer> createState() => _ComposerState();
+}
+
+class _ComposerState extends State<_Composer> {
+  bool _showFormatBar = false;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final l10n = AppLocalizations.of(context);
-    if (recording) {
+    if (widget.recording) {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         color: cs.errorContainer,
@@ -2696,7 +2813,7 @@ class _Composer extends StatelessWidget {
           child: Row(
             children: [
               IconButton(
-                onPressed: onCancelRecord,
+                onPressed: widget.onCancelRecord,
                 icon: Icon(Icons.delete_outline, color: cs.error),
               ),
               const SizedBox(width: 8),
@@ -2704,12 +2821,12 @@ class _Composer extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Recording — ${recordElapsed.inSeconds}s',
+                  'Recording — ${widget.recordElapsed.inSeconds}s',
                   style: TextStyle(color: cs.onErrorContainer),
                 ),
               ),
               IconButton.filled(
-                onPressed: onStopAndSend,
+                onPressed: widget.onStopAndSend,
                 icon: const Icon(Icons.send),
               ),
             ],
@@ -2724,57 +2841,168 @@ class _Composer extends StatelessWidget {
       ),
       child: SafeArea(
         top: false,
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            IconButton(
-              icon: const Icon(Icons.attach_file),
-              tooltip: 'Attach photo, video or file',
-              onPressed: sending ? null : onAttach,
-            ),
-            IconButton(
-              icon: const Icon(Icons.schedule),
-              tooltip: 'Schedule send',
-              onPressed: sending ? null : onSchedule,
-            ),
-            IconButton(
-              icon: Icon(
-                dictating ? Icons.mic : Icons.keyboard_voice_outlined,
-                color: dictating ? cs.error : null,
-              ),
-              tooltip: dictating ? l10n.voiceListening : l10n.voiceDictateHint,
-              onPressed: sending || recording ? null : onDictate,
-            ),
-            Expanded(
-              child: TextField(
-                controller: controller,
-                minLines: 1,
-                maxLines: 6,
-                decoration: InputDecoration(
-                  hintText: dictating ? l10n.voiceListening : l10n.messageHint,
-                  border: const OutlineInputBorder(
-                    borderRadius: BorderRadius.all(Radius.circular(24)),
-                  ),
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            if (_showFormatBar)
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    _FmtBtn(
+                      icon: Icons.format_bold,
+                      tooltip: 'Bold',
+                      onPressed: widget.sending
+                          ? null
+                          : () => wrapComposerSelection(
+                                widget.controller,
+                                openTag: '{b}',
+                                closeTag: '{/b}',
+                              ),
+                    ),
+                    _FmtBtn(
+                      icon: Icons.format_italic,
+                      tooltip: 'Italic',
+                      onPressed: widget.sending
+                          ? null
+                          : () => wrapComposerSelection(
+                                widget.controller,
+                                openTag: '{i}',
+                                closeTag: '{/i}',
+                              ),
+                    ),
+                    _FmtBtn(
+                      icon: Icons.format_underlined,
+                      tooltip: 'Underline',
+                      onPressed: widget.sending
+                          ? null
+                          : () => wrapComposerSelection(
+                                widget.controller,
+                                openTag: '{u}',
+                                closeTag: '{/u}',
+                              ),
+                    ),
+                    _FmtBtn(
+                      icon: Icons.format_color_text,
+                      tooltip: 'Accent color',
+                      onPressed: widget.sending
+                          ? null
+                          : () => wrapComposerSelection(
+                                widget.controller,
+                                openTag: '{c:BE9A5F}',
+                                closeTag: '{/c}',
+                              ),
+                    ),
+                    _FmtBtn(
+                      icon: Icons.draw_outlined,
+                      tooltip: 'Draw or sign',
+                      onPressed: widget.sending ? null : widget.onDraw,
+                    ),
+                  ],
                 ),
-                onChanged: (_) {},
               ),
-            ),
-            const SizedBox(width: 4),
-            GestureDetector(
-              onLongPress: onStartRecord,
-              child: IconButton.filled(
-                onPressed: controller.text.trim().isEmpty
-                    ? onStartRecord
-                    : onSendText,
-                icon: Icon(controller.text.trim().isEmpty
-                    ? Icons.mic
-                    : Icons.send),
-              ),
+            Row(
+              children: [
+                IconButton(
+                  icon: Icon(
+                    _showFormatBar ? Icons.text_fields : Icons.text_format,
+                    color: _showFormatBar ? cs.primary : null,
+                  ),
+                  tooltip: 'Text formatting',
+                  onPressed: widget.sending
+                      ? null
+                      : () => setState(() => _showFormatBar = !_showFormatBar),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.attach_file),
+                  tooltip: 'Attach photo, video or file',
+                  onPressed: widget.sending ? null : widget.onAttach,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.schedule),
+                  tooltip: 'Schedule send',
+                  onPressed: widget.sending ? null : widget.onSchedule,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.emoji_emotions_outlined),
+                  tooltip: 'Emoji',
+                  onPressed: widget.sending || widget.recording
+                      ? null
+                      : () => ComposerEmojiSheet.show(
+                            context,
+                            onPick: (e) =>
+                                insertAtComposerCursor(widget.controller, e),
+                          ),
+                ),
+                IconButton(
+                  icon: Icon(
+                    widget.dictating ? Icons.mic : Icons.keyboard_voice_outlined,
+                    color: widget.dictating ? cs.error : null,
+                  ),
+                  tooltip:
+                      widget.dictating ? l10n.voiceListening : l10n.voiceDictateHint,
+                  onPressed: widget.sending || widget.recording
+                      ? null
+                      : widget.onDictate,
+                ),
+                Expanded(
+                  child: TextField(
+                    controller: widget.controller,
+                    minLines: 1,
+                    maxLines: 6,
+                    decoration: InputDecoration(
+                      hintText: widget.dictating
+                          ? l10n.voiceListening
+                          : l10n.messageHint,
+                      border: const OutlineInputBorder(
+                        borderRadius: BorderRadius.all(Radius.circular(24)),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 10),
+                    ),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: widget.controller,
+                  builder: (_, value, __) {
+                    final hasText = value.text.trim().isNotEmpty;
+                    return GestureDetector(
+                      onLongPress: widget.onStartRecord,
+                      child: IconButton.filled(
+                        onPressed: hasText ? widget.onSendText : widget.onStartRecord,
+                        icon: Icon(hasText ? Icons.send : Icons.mic),
+                      ),
+                    );
+                  },
+                ),
+              ],
             ),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _FmtBtn extends StatelessWidget {
+  const _FmtBtn({
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+  });
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      icon: Icon(icon, size: 20),
+      tooltip: tooltip,
+      visualDensity: VisualDensity.compact,
+      onPressed: onPressed,
     );
   }
 }
