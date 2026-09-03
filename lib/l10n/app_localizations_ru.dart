@@ -222,4 +222,77 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get messageHint => 'Сообщение';
+
+  @override
+  String get themeSettings => 'Тема и цвета';
+
+  @override
+  String get themeSettingsSubtitle => 'Светлая, тёмная, пресеты';
+
+  @override
+  String get themeMode => 'Режим';
+
+  @override
+  String get themeModeSystem => 'Система';
+
+  @override
+  String get themeModeLight => 'Светлая';
+
+  @override
+  String get themeModeDark => 'Тёмная';
+
+  @override
+  String get themePresets => 'Выберите тему';
+
+  @override
+  String get themePresetSignal => 'Signal';
+
+  @override
+  String get themePresetSaffron => 'Saffron';
+
+  @override
+  String get themePresetIndigo => 'Indigo Night';
+
+  @override
+  String get themePresetForest => 'Forest';
+
+  @override
+  String get themePresetPlum => 'Plum';
+
+  @override
+  String get themePresetGraphite => 'Graphite';
+
+  @override
+  String get themeCustom => 'Своя';
+
+  @override
+  String get themeCustomHint =>
+      'Настройте оттенок — яркость в читаемом диапазоне.';
+
+  @override
+  String get themeHue => 'Hue';
+
+  @override
+  String get themeSaturation => 'Saturation';
+
+  @override
+  String get themeLightness => 'Lightness';
+
+  @override
+  String get themePickAccent => 'Отдельный accent';
+
+  @override
+  String get themeAccentHue => 'Accent hue';
+
+  @override
+  String get themeApplyCustom => 'Применить';
+
+  @override
+  String get themePreview => 'Просмотр';
+
+  @override
+  String get themePreviewAiCta => 'Спросить INTERACT AI';
+
+  @override
+  String get themeReset => 'Сброс Signal + System';
 }

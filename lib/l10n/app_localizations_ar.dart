@@ -222,4 +222,76 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get messageHint => 'رسالة';
+
+  @override
+  String get themeSettings => 'المظهر والألوان';
+
+  @override
+  String get themeSettingsSubtitle => 'فاتح، داكن، جاهز أو مخصص';
+
+  @override
+  String get themeMode => 'وضع العرض';
+
+  @override
+  String get themeModeSystem => 'النظام';
+
+  @override
+  String get themeModeLight => 'فاتح';
+
+  @override
+  String get themeModeDark => 'داكن';
+
+  @override
+  String get themePresets => 'اختر سمة';
+
+  @override
+  String get themePresetSignal => 'Signal';
+
+  @override
+  String get themePresetSaffron => 'Saffron';
+
+  @override
+  String get themePresetIndigo => 'Indigo Night';
+
+  @override
+  String get themePresetForest => 'Forest';
+
+  @override
+  String get themePresetPlum => 'Plum';
+
+  @override
+  String get themePresetGraphite => 'Graphite';
+
+  @override
+  String get themeCustom => 'مخصص';
+
+  @override
+  String get themeCustomHint => 'اضبط اللون — السطوع يبقى في نطاق مقروء.';
+
+  @override
+  String get themeHue => 'Hue';
+
+  @override
+  String get themeSaturation => 'Saturation';
+
+  @override
+  String get themeLightness => 'Lightness';
+
+  @override
+  String get themePickAccent => 'لون accent منفصل';
+
+  @override
+  String get themeAccentHue => 'Accent hue';
+
+  @override
+  String get themeApplyCustom => 'تطبيق السمة';
+
+  @override
+  String get themePreview => 'معاينة';
+
+  @override
+  String get themePreviewAiCta => 'اسأل INTERACT AI';
+
+  @override
+  String get themeReset => 'إعادة Signal + System';
 }

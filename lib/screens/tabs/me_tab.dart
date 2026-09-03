@@ -738,6 +738,12 @@ class _MeTabState extends ConsumerState<MeTab> {
                 onTap: () => _pickLanguage(context, l10n),
               ),
               _Tile(
+                icon: Icons.palette_outlined,
+                label: l10n.themeSettings,
+                subtitle: l10n.themeSettingsSubtitle,
+                onTap: () => context.push('/settings/theme'),
+              ),
+              _Tile(
                 icon: Icons.groups_2_outlined,
                 label: l10n.communities,
                 subtitle: l10n.communitiesSubtitle,

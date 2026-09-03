@@ -225,4 +225,76 @@ class AppLocalizationsTr extends AppLocalizations {
 
   @override
   String get messageHint => 'Mesaj';
+
+  @override
+  String get themeSettings => 'Tema ve renkler';
+
+  @override
+  String get themeSettingsSubtitle => 'Açık, koyu, hazır ve özel';
+
+  @override
+  String get themeMode => 'Görünüm modu';
+
+  @override
+  String get themeModeSystem => 'Sistem';
+
+  @override
+  String get themeModeLight => 'Açık';
+
+  @override
+  String get themeModeDark => 'Koyu';
+
+  @override
+  String get themePresets => 'Tema seç';
+
+  @override
+  String get themePresetSignal => 'Signal';
+
+  @override
+  String get themePresetSaffron => 'Saffron';
+
+  @override
+  String get themePresetIndigo => 'Indigo Night';
+
+  @override
+  String get themePresetForest => 'Forest';
+
+  @override
+  String get themePresetPlum => 'Plum';
+
+  @override
+  String get themePresetGraphite => 'Graphite';
+
+  @override
+  String get themeCustom => 'Özel';
+
+  @override
+  String get themeCustomHint => 'Renk ayarla — okunabilirlik korunur.';
+
+  @override
+  String get themeHue => 'Hue';
+
+  @override
+  String get themeSaturation => 'Saturation';
+
+  @override
+  String get themeLightness => 'Lightness';
+
+  @override
+  String get themePickAccent => 'Ayrı accent rengi';
+
+  @override
+  String get themeAccentHue => 'Accent hue';
+
+  @override
+  String get themeApplyCustom => 'Özel temayı uygula';
+
+  @override
+  String get themePreview => 'Önizleme';
+
+  @override
+  String get themePreviewAiCta => 'INTERACT AI\'ya sor';
+
+  @override
+  String get themeReset => 'Signal + System\'e sıfırla';
 }

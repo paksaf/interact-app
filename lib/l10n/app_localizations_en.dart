@@ -223,4 +223,77 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get messageHint => 'Message';
+
+  @override
+  String get themeSettings => 'Theme & colors';
+
+  @override
+  String get themeSettingsSubtitle => 'Light, dark, presets & custom';
+
+  @override
+  String get themeMode => 'Appearance mode';
+
+  @override
+  String get themeModeSystem => 'System';
+
+  @override
+  String get themeModeLight => 'Light';
+
+  @override
+  String get themeModeDark => 'Dark';
+
+  @override
+  String get themePresets => 'Choose a theme';
+
+  @override
+  String get themePresetSignal => 'Signal';
+
+  @override
+  String get themePresetSaffron => 'Saffron';
+
+  @override
+  String get themePresetIndigo => 'Indigo Night';
+
+  @override
+  String get themePresetForest => 'Forest';
+
+  @override
+  String get themePresetPlum => 'Plum';
+
+  @override
+  String get themePresetGraphite => 'Graphite';
+
+  @override
+  String get themeCustom => 'Custom';
+
+  @override
+  String get themeCustomHint =>
+      'Adjust hue and saturation — lightness stays in a readable band.';
+
+  @override
+  String get themeHue => 'Hue';
+
+  @override
+  String get themeSaturation => 'Saturation';
+
+  @override
+  String get themeLightness => 'Lightness';
+
+  @override
+  String get themePickAccent => 'Pick accent hue separately';
+
+  @override
+  String get themeAccentHue => 'Accent hue';
+
+  @override
+  String get themeApplyCustom => 'Apply custom theme';
+
+  @override
+  String get themePreview => 'Preview';
+
+  @override
+  String get themePreviewAiCta => 'Ask INTERACT AI';
+
+  @override
+  String get themeReset => 'Reset to Signal + System';
 }

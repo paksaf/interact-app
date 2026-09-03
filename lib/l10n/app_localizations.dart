@@ -525,6 +525,150 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Message'**
   String get messageHint;
+
+  /// No description provided for @themeSettings.
+  ///
+  /// In en, this message translates to:
+  /// **'Theme & colors'**
+  String get themeSettings;
+
+  /// No description provided for @themeSettingsSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Light, dark, presets & custom'**
+  String get themeSettingsSubtitle;
+
+  /// No description provided for @themeMode.
+  ///
+  /// In en, this message translates to:
+  /// **'Appearance mode'**
+  String get themeMode;
+
+  /// No description provided for @themeModeSystem.
+  ///
+  /// In en, this message translates to:
+  /// **'System'**
+  String get themeModeSystem;
+
+  /// No description provided for @themeModeLight.
+  ///
+  /// In en, this message translates to:
+  /// **'Light'**
+  String get themeModeLight;
+
+  /// No description provided for @themeModeDark.
+  ///
+  /// In en, this message translates to:
+  /// **'Dark'**
+  String get themeModeDark;
+
+  /// No description provided for @themePresets.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose a theme'**
+  String get themePresets;
+
+  /// No description provided for @themePresetSignal.
+  ///
+  /// In en, this message translates to:
+  /// **'Signal'**
+  String get themePresetSignal;
+
+  /// No description provided for @themePresetSaffron.
+  ///
+  /// In en, this message translates to:
+  /// **'Saffron'**
+  String get themePresetSaffron;
+
+  /// No description provided for @themePresetIndigo.
+  ///
+  /// In en, this message translates to:
+  /// **'Indigo Night'**
+  String get themePresetIndigo;
+
+  /// No description provided for @themePresetForest.
+  ///
+  /// In en, this message translates to:
+  /// **'Forest'**
+  String get themePresetForest;
+
+  /// No description provided for @themePresetPlum.
+  ///
+  /// In en, this message translates to:
+  /// **'Plum'**
+  String get themePresetPlum;
+
+  /// No description provided for @themePresetGraphite.
+  ///
+  /// In en, this message translates to:
+  /// **'Graphite'**
+  String get themePresetGraphite;
+
+  /// No description provided for @themeCustom.
+  ///
+  /// In en, this message translates to:
+  /// **'Custom'**
+  String get themeCustom;
+
+  /// No description provided for @themeCustomHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Adjust hue and saturation — lightness stays in a readable band.'**
+  String get themeCustomHint;
+
+  /// No description provided for @themeHue.
+  ///
+  /// In en, this message translates to:
+  /// **'Hue'**
+  String get themeHue;
+
+  /// No description provided for @themeSaturation.
+  ///
+  /// In en, this message translates to:
+  /// **'Saturation'**
+  String get themeSaturation;
+
+  /// No description provided for @themeLightness.
+  ///
+  /// In en, this message translates to:
+  /// **'Lightness'**
+  String get themeLightness;
+
+  /// No description provided for @themePickAccent.
+  ///
+  /// In en, this message translates to:
+  /// **'Pick accent hue separately'**
+  String get themePickAccent;
+
+  /// No description provided for @themeAccentHue.
+  ///
+  /// In en, this message translates to:
+  /// **'Accent hue'**
+  String get themeAccentHue;
+
+  /// No description provided for @themeApplyCustom.
+  ///
+  /// In en, this message translates to:
+  /// **'Apply custom theme'**
+  String get themeApplyCustom;
+
+  /// No description provided for @themePreview.
+  ///
+  /// In en, this message translates to:
+  /// **'Preview'**
+  String get themePreview;
+
+  /// No description provided for @themePreviewAiCta.
+  ///
+  /// In en, this message translates to:
+  /// **'Ask INTERACT AI'**
+  String get themePreviewAiCta;
+
+  /// No description provided for @themeReset.
+  ///
+  /// In en, this message translates to:
+  /// **'Reset to Signal + System'**
+  String get themeReset;
 }
 
 class _AppLocalizationsDelegate

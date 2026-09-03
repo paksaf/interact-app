@@ -10,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../l10n/app_localizations.dart';
 import '../../services/ai_contact_service.dart';
 import '../../services/location_service.dart';
 import '../../services/smart_welcome_service.dart';
@@ -259,6 +260,7 @@ class _TopBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final l10n = AppLocalizations.of(context);
     return Row(
       children: [
         Semantics(
@@ -280,6 +282,15 @@ class _TopBar extends StatelessWidget {
           ),
         ),
         const Spacer(),
+        Semantics(
+          button: true,
+          label: l10n.themeSettings,
+          child: IconButton(
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.palette_outlined, size: 22),
+            onPressed: () => context.push('/settings/theme'),
+          ),
+        ),
         Semantics(
           button: true,
           label: 'Scan invite QR',

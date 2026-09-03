@@ -17,6 +17,7 @@ import 'package:go_router/go_router.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
 import 'core/l10n/locale_prefs.dart';
+import 'core/theme/theme_prefs.dart';
 import 'l10n/app_localizations.dart';
 import 'models/chat.dart';
 import 'screens/auth/sign_in_screen.dart';
@@ -30,6 +31,7 @@ import 'services/offline_maps_service.dart';
 import 'screens/camera/camera_effects_screen.dart';
 import 'screens/contacts/device_contacts_screen.dart';
 import 'screens/me/backup_screen.dart';
+import 'screens/settings/theme_settings_screen.dart';
 import 'screens/chat/chat_thread_screen.dart';
 import 'screens/chat/chat_thread_loader.dart';
 import 'screens/chat/communities_screen.dart';
@@ -320,6 +322,9 @@ final _router = GoRouter(
         path: '/device-contacts',
         builder: (_, __) => const DeviceContactsScreen()),
     GoRoute(path: '/backup', builder: (_, __) => const BackupScreen()),
+    GoRoute(
+        path: '/settings/theme',
+        builder: (_, __) => const ThemeSettingsScreen()),
     GoRoute(path: '/new-group', builder: (_, __) => const NewGroupScreen()),
     GoRoute(
       path: '/approve-login',
@@ -487,7 +492,9 @@ class InteractApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     ref.watch(localeControllerProvider);
+    ref.watch(themeControllerProvider);
     final override = ref.read(localeControllerProvider.notifier).localeOverride;
+    final themeState = ref.watch(themeControllerProvider);
 
     return MaterialApp.router(
       title: 'INTERACT',
@@ -510,32 +517,17 @@ class InteractApp extends ConsumerWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF0D4A5C), // INTERACT teal-navy (matches app icon)
-          brightness: Brightness.light,
-        ).copyWith(
-          secondary: const Color(0xFFBE9A5F), // gold accent
-          tertiary: const Color(0xFFBE9A5F),
-        ),
-        useMaterial3: true,
-        appBarTheme: const AppBarTheme(
-          centerTitle: false,
-          foregroundColor: Color(0xFF0D4A5C),
-        ),
+      theme: buildTalkTheme(
+        seed: themeState.seed,
+        accent: themeState.accent,
+        brightness: Brightness.light,
       ),
-      darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF0D4A5C),
-          brightness: Brightness.dark,
-        ).copyWith(
-          secondary: const Color(0xFFBE9A5F),
-          tertiary: const Color(0xFFBE9A5F),
-        ),
-        useMaterial3: true,
-        appBarTheme: const AppBarTheme(centerTitle: false),
+      darkTheme: buildTalkTheme(
+        seed: themeState.seed,
+        accent: themeState.accent,
+        brightness: Brightness.dark,
       ),
-      themeMode: ThemeMode.system,
+      themeMode: themeState.mode,
       routerConfig: _router,
       builder: (context, child) {
         final inner = child ?? const SizedBox.shrink();

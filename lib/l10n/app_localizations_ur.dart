@@ -223,4 +223,77 @@ class AppLocalizationsUr extends AppLocalizations {
 
   @override
   String get messageHint => 'پیغام';
+
+  @override
+  String get themeSettings => 'تھیم اور رنگ';
+
+  @override
+  String get themeSettingsSubtitle => 'لائٹ، ڈارک، پری سیٹ اور کسٹم';
+
+  @override
+  String get themeMode => 'ظاہری شکل';
+
+  @override
+  String get themeModeSystem => 'سسٹم';
+
+  @override
+  String get themeModeLight => 'لائٹ';
+
+  @override
+  String get themeModeDark => 'ڈارک';
+
+  @override
+  String get themePresets => 'تھیم منتخب کریں';
+
+  @override
+  String get themePresetSignal => 'سگنل';
+
+  @override
+  String get themePresetSaffron => 'زعفران';
+
+  @override
+  String get themePresetIndigo => 'انڈigo رات';
+
+  @override
+  String get themePresetForest => 'جنگل';
+
+  @override
+  String get themePresetPlum => 'بیر';
+
+  @override
+  String get themePresetGraphite => 'Graphite';
+
+  @override
+  String get themeCustom => 'کسٹم';
+
+  @override
+  String get themeCustomHint =>
+      'رنگ و سیچوریشن — lightness پڑھنے کے قابل رہتی ہے۔';
+
+  @override
+  String get themeHue => 'Hue';
+
+  @override
+  String get themeSaturation => 'Saturation';
+
+  @override
+  String get themeLightness => 'Lightness';
+
+  @override
+  String get themePickAccent => 'الگ accent hue';
+
+  @override
+  String get themeAccentHue => 'Accent hue';
+
+  @override
+  String get themeApplyCustom => 'کسٹم تھیم لگائیں';
+
+  @override
+  String get themePreview => 'پیش نظارہ';
+
+  @override
+  String get themePreviewAiCta => 'INTERACT AI سے پوچھیں';
+
+  @override
+  String get themeReset => 'Signal + System پر واپس';
 }

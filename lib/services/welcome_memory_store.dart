@@ -1,34 +1,62 @@
 // SPDX-License-Identifier: AGPL-3.0
 //
-// Local welcome memory — visit streak, quick notes/reminders (device-only).
-// Gives the AI welcome layer continuity without a new server schema.
+// Local welcome memory — visit streak, quick notes/reminders (device-first).
+// Reminders mirror best-effort to IL Lifestyle schedule (local stays truth).
 
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'il_schedule_sync_service.dart';
 
 class WelcomeReminder {
   const WelcomeReminder({
     required this.id,
     required this.body,
     required this.dueAt,
+    this.ilTaskId,
+    this.syncPending = false,
   });
 
   final String id;
   final String body;
   final DateTime dueAt;
+  final String? ilTaskId;
+  final bool syncPending;
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'body': body,
         'dueAt': dueAt.toIso8601String(),
+        if (ilTaskId != null) 'ilTaskId': ilTaskId,
+        'syncPending': syncPending,
       };
 
-  factory WelcomeReminder.fromJson(Map<String, dynamic> j) => WelcomeReminder(
-        id: j['id'] as String? ?? '',
-        body: j['body'] as String? ?? '',
-        dueAt: DateTime.tryParse(j['dueAt'] as String? ?? '') ?? DateTime.now(),
-      );
+  factory WelcomeReminder.fromJson(Map<String, dynamic> j) {
+    final ilId = j['ilTaskId'] as String?;
+    final pending = j['syncPending'] as bool? ?? (ilId == null || ilId.isEmpty);
+    return WelcomeReminder(
+      id: j['id'] as String? ?? '',
+      body: j['body'] as String? ?? '',
+      dueAt: DateTime.tryParse(j['dueAt'] as String? ?? '') ?? DateTime.now(),
+      ilTaskId: ilId,
+      syncPending: pending,
+    );
+  }
+
+  WelcomeReminder copyWith({
+    String? ilTaskId,
+    bool? syncPending,
+  }) {
+    return WelcomeReminder(
+      id: id,
+      body: body,
+      dueAt: dueAt,
+      ilTaskId: ilTaskId ?? this.ilTaskId,
+      syncPending: syncPending ?? this.syncPending,
+    );
+  }
 }
 
 class WelcomeNote {
@@ -91,6 +119,8 @@ class WelcomeMemoryStore {
   static const _kNote = 'welcome.pinnedNote';
   static const _kReminders = 'welcome.reminders';
 
+  static const _flushMax = 5;
+
   Future<WelcomeMemory> recordAppOpen() async {
     final prefs = await SharedPreferences.getInstance();
     final today = _dayKey(DateTime.now());
@@ -128,17 +158,79 @@ class WelcomeMemoryStore {
   Future<void> addReminder({required String body, required DateTime dueAt}) async {
     final prefs = await SharedPreferences.getInstance();
     final mem = await load();
-    final next = [
-      ...mem.reminders,
-      WelcomeReminder(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
-        body: body.trim(),
-        dueAt: dueAt,
-      ),
-    ];
+    final reminder = WelcomeReminder(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      body: body.trim(),
+      dueAt: dueAt,
+      syncPending: true,
+    );
+    final next = [...mem.reminders, reminder];
+    await _writeReminders(prefs, next);
+    _mirrorReminderBestEffort(reminder);
+  }
+
+  /// Retry pending IL mirrors — bounded, non-blocking. Call at app open.
+  Future<void> flushPendingIlSync({int maxItems = _flushMax}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final mem = await _read(prefs);
+    final pending = mem.reminders
+        .where((r) => r.syncPending && (r.ilTaskId == null || r.ilTaskId!.isEmpty))
+        .take(maxItems)
+        .toList();
+    if (pending.isEmpty) return;
+
+    var changed = false;
+    final updated = [...mem.reminders];
+    for (final r in pending) {
+      final idx = updated.indexWhere((x) => x.id == r.id);
+      if (idx < 0) continue;
+      final synced = await _trySyncReminder(r);
+      if (synced != null) {
+        updated[idx] = synced;
+        changed = true;
+      }
+    }
+    if (changed) {
+      await _writeReminders(prefs, updated);
+    }
+  }
+
+  void _mirrorReminderBestEffort(WelcomeReminder reminder) {
+    Future<void>(() async {
+      try {
+        final synced = await _trySyncReminder(reminder);
+        if (synced == null) return;
+        final prefs = await SharedPreferences.getInstance();
+        final mem = await _read(prefs);
+        final idx = mem.reminders.indexWhere((r) => r.id == reminder.id);
+        if (idx < 0) return;
+        final next = [...mem.reminders];
+        next[idx] = synced;
+        await _writeReminders(prefs, next);
+      } catch (e) {
+        if (kDebugMode) debugPrint('[WelcomeMemory] IL mirror: $e');
+      }
+    });
+  }
+
+  Future<WelcomeReminder?> _trySyncReminder(WelcomeReminder r) async {
+    final result = await IlScheduleSyncService.instance.pushReminder(
+      title: r.body,
+      dueAt: r.dueAt,
+    );
+    if (result.taskId != null) {
+      return r.copyWith(ilTaskId: result.taskId, syncPending: false);
+    }
+    return r.copyWith(syncPending: true);
+  }
+
+  Future<void> _writeReminders(
+    SharedPreferences prefs,
+    List<WelcomeReminder> reminders,
+  ) async {
     await prefs.setString(
       _kReminders,
-      jsonEncode(next.map((r) => r.toJson()).toList()),
+      jsonEncode(reminders.map((r) => r.toJson()).toList()),
     );
   }
 
