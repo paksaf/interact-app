@@ -8,6 +8,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../models/social_post.dart';
@@ -15,6 +16,7 @@ import '../../services/auth_service.dart';
 import '../../services/social_engagement_service.dart';
 import '../../utils/chat_formatters.dart';
 import '../user_avatar.dart';
+import 'reel_embed_webview.dart';
 
 class SocialReelsViewer extends StatefulWidget {
   const SocialReelsViewer({
@@ -152,8 +154,8 @@ class _SocialReelsViewerState extends State<SocialReelsViewer> {
   Future<void> _shareReel() async {
     final reelId = _post.engagementReelId;
     if (reelId == null) return;
-    final url = _post.mediaUrl?.isNotEmpty == true
-        ? _post.mediaUrl!
+    final url = _post.shareUrl?.isNotEmpty == true
+        ? _post.shareUrl!
         : 'https://qurbanisahulat.com';
     final result = await Share.share(
       '${_post.authorName} on INTERACT\n$url',
@@ -183,12 +185,8 @@ class _SocialReelsViewerState extends State<SocialReelsViewer> {
     await _disposeVideo();
 
     final post = _post;
-    if (!post.hasLocalMedia) {
-      _schedulePhotoProgress();
-      return;
-    }
 
-    if (post.isVideo) {
+    if (post.hasLocalMedia && post.isVideo) {
       final file = File(post.mediaPath!);
       if (!await file.exists()) {
         _schedulePhotoProgress();
@@ -206,6 +204,28 @@ class _SocialReelsViewerState extends State<SocialReelsViewer> {
         await _disposeVideo();
         _schedulePhotoProgress();
       }
+      return;
+    }
+
+    if (post.isServerVideo && post.serverMediaUrl != null) {
+      final controller =
+          VideoPlayerController.networkUrl(Uri.parse(post.serverMediaUrl!));
+      _video = controller;
+      try {
+        await controller.initialize();
+        controller.setLooping(false);
+        controller.addListener(_onVideoTick);
+        if (!_paused) await controller.play();
+        if (mounted) setState(() {});
+      } catch (_) {
+        await _disposeVideo();
+        _schedulePhotoProgress();
+      }
+      return;
+    }
+
+    if (!post.hasLocalMedia && !post.hasServerMedia) {
+      _schedulePhotoProgress();
       return;
     }
 
@@ -726,9 +746,30 @@ class _MediaSlide extends StatelessWidget {
   final SocialPost post;
   final VideoPlayerController? video;
 
+  Future<void> _openExternal(BuildContext context) async {
+    final raw = post.shareUrl;
+    if (raw == null || raw.isEmpty) return;
+    final uri = Uri.tryParse(raw);
+    if (uri == null) return;
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (post.hasLocalMedia && post.isVideo && video != null && video!.value.isInitialized) {
+      return FittedBox(
+        fit: BoxFit.cover,
+        child: SizedBox(
+          width: video!.value.size.width,
+          height: video!.value.size.height,
+          child: VideoPlayer(video!),
+        ),
+      );
+    }
+
+    if (post.isServerVideo && video != null && video!.value.isInitialized) {
       return FittedBox(
         fit: BoxFit.cover,
         child: SizedBox(
@@ -747,23 +788,64 @@ class _MediaSlide extends StatelessWidget {
       );
     }
 
-    final ytThumb = _youtubeThumbUrl(post.mediaUrl);
-    if (ytThumb != null) {
-      return Stack(
-        fit: StackFit.expand,
-        children: [
-          Image.network(
-            ytThumb,
-            fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => _textOnly(post),
-          ),
-          const Center(
-            child: Icon(Icons.play_circle_fill, color: Colors.white70, size: 72),
-          ),
-        ],
+    final embed = post.embedHtml?.trim();
+    if (embed != null && embed.isNotEmpty) {
+      final base = post.reelPlatform == ReelPlatform.twitter
+          ? 'https://twitter.com'
+          : 'https://www.tiktok.com';
+      return ReelEmbedWebView(embedHtml: embed, baseUrl: base);
+    }
+
+    if (post.isServerPhoto && post.serverMediaUrl != null) {
+      return Image.network(
+        post.serverMediaUrl!,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => _thumbnailOrText(context, post),
       );
     }
 
+    final thumb = post.thumbnailUrl ?? _youtubeThumbUrl(post.linkUrl ?? post.mediaUrl);
+    if (thumb != null) {
+      return GestureDetector(
+        onTap: () => _openExternal(context),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Image.network(
+              thumb,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => _textOnly(post),
+            ),
+            const Center(
+              child: Icon(Icons.play_circle_fill, color: Colors.white70, size: 72),
+            ),
+            if (post.reelPlatform == ReelPlatform.tiktok ||
+                post.reelPlatform == ReelPlatform.twitter)
+              Positioned(
+                bottom: 48,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: TextButton.icon(
+                    onPressed: () => _openExternal(context),
+                    icon: const Icon(Icons.open_in_new, color: Colors.white),
+                    label: const Text('Open original', style: TextStyle(color: Colors.white)),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      );
+    }
+
+    return _textOnly(post);
+  }
+
+  Widget _thumbnailOrText(BuildContext context, SocialPost post) {
+    final thumb = post.thumbnailUrl;
+    if (thumb != null && thumb.isNotEmpty) {
+      return Image.network(thumb, fit: BoxFit.cover);
+    }
     return _textOnly(post);
   }
 

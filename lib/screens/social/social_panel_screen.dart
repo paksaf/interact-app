@@ -18,8 +18,10 @@ import '../../services/location_trace_service.dart';
 import '../../services/social_feed_service.dart';
 import '../../services/talk_api.dart';
 import '../../widgets/branded_app_bar.dart';
+import '../../widgets/social/add_reel_sheet.dart';
 import '../../widgets/social/social_feed_card.dart';
 import '../../services/social_reels_viewer_launcher.dart';
+import '../../widgets/social/social_reels_viewer.dart';
 import '../../widgets/social/social_stories_row.dart';
 import '../../widgets/user_avatar.dart';
 
@@ -330,6 +332,20 @@ class _SocialPanelScreenState extends ConsumerState<SocialPanelScreen>
     );
   }
 
+  Future<void> _addReel() async {
+    if (!await ref.read(authServiceProvider).hasValidToken()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sign in to add reels')),
+      );
+      return;
+    }
+    final post = await AddReelSheet.show(context);
+    if (post == null || !mounted) return;
+    await SocialReelsViewer.open(context, posts: [post]);
+    await _reload();
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -405,6 +421,11 @@ class _SocialPanelScreenState extends ConsumerState<SocialPanelScreen>
                         _reload();
                       },
                     ),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _addReel,
+                    icon: const Icon(Icons.movie_creation_outlined, size: 18),
+                    label: const Text('Add reel'),
                   ),
                 ],
               ),
