@@ -17,9 +17,11 @@ import 'package:go_router/go_router.dart';
 import '../../services/device_contacts_index.dart';
 import '../../services/location_service.dart';
 import '../../services/talk_api.dart';
+import '../../services/weather_snapshot_service.dart';
 import '../../services/voice/voice_commands.dart';
 import '../../widgets/branded_app_bar.dart';
 import '../../widgets/call_row.dart';
+import '../../widgets/smart_welcome_layer.dart';
 
 class CallsTab extends ConsumerStatefulWidget {
   const CallsTab({super.key});
@@ -105,8 +107,8 @@ class _CallsTabState extends ConsumerState<CallsTab> {
         ],
       ),
       body: RefreshIndicator(
-        onRefresh: () async {
-          // Block-body setState (arrow form returns the Future → Flutter throws).
+          onRefresh: () async {
+          WeatherSnapshotService.instance.clearCache();
           final f = ref.read(talkApiProvider).callHistory();
           setState(() {
             _history = f;
@@ -116,6 +118,11 @@ class _CallsTabState extends ConsumerState<CallsTab> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            SmartWelcomeLayer(
+              onSubtitle: (label) {
+                if (mounted) setState(() => _subtitle = label);
+              },
+            ),
             // Primary action row — two large tiles, calls-first
             Row(
               children: [

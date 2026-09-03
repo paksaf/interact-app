@@ -19,9 +19,17 @@ import 'package:geolocator/geolocator.dart';
 
 /// Resolved place + a time-of-day greeting, ready to drop into a header.
 class PlaceInfo {
-  const PlaceInfo({required this.city, required this.greeting});
+  const PlaceInfo({
+    required this.city,
+    required this.greeting,
+    this.latitude,
+    this.longitude,
+  });
   final String city;
   final String greeting;
+  /// Coarse fix for weather fetch — never uploaded by Talk.
+  final double? latitude;
+  final double? longitude;
 
   /// "Good evening · Multan" — the personalised subtitle.
   String get label => '$greeting · $city';
@@ -113,7 +121,12 @@ class LocationService {
       ).timeout(const Duration(seconds: 8));
 
       final city = _nearestCity(pos.latitude, pos.longitude);
-      final info = PlaceInfo(city: city, greeting: greetingForNow());
+      final info = PlaceInfo(
+        city: city,
+        greeting: greetingForNow(),
+        latitude: pos.latitude,
+        longitude: pos.longitude,
+      );
       _cached = info;
       return info;
     } catch (_) {
