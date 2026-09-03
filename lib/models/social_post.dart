@@ -71,6 +71,12 @@ class SocialPost {
     this.sourceThreadId,
     this.sourceThreadTitle,
     this.pendingSync = false,
+    this.reelId,
+    this.likeCount = 0,
+    this.viewCount = 0,
+    this.commentCount = 0,
+    this.shareCount = 0,
+    this.liked = false,
   });
 
   final String id;
@@ -86,6 +92,46 @@ class SocialPost {
   final String? sourceThreadId;
   final String? sourceThreadTitle;
   final bool pendingSync;
+  /// Server SocialReel uuid — engagement rail active when set.
+  final String? reelId;
+  final int likeCount;
+  final int viewCount;
+  final int commentCount;
+  final int shareCount;
+  final bool liked;
+
+  /// Id used for /api/v1/me/reels/[reelId]/* calls.
+  String? get engagementReelId =>
+      (reelId != null && reelId!.isNotEmpty) ? reelId : null;
+
+  SocialPost copyWithEngagement({
+    int? likeCount,
+    int? viewCount,
+    int? commentCount,
+    int? shareCount,
+    bool? liked,
+  }) =>
+      SocialPost(
+        id: id,
+        authorId: authorId,
+        authorName: authorName,
+        authorAvatarUrl: authorAvatarUrl,
+        audience: audience,
+        kind: kind,
+        body: body,
+        mediaPath: mediaPath,
+        mediaUrl: mediaUrl,
+        createdAt: createdAt,
+        sourceThreadId: sourceThreadId,
+        sourceThreadTitle: sourceThreadTitle,
+        pendingSync: pendingSync,
+        reelId: reelId,
+        likeCount: likeCount ?? this.likeCount,
+        viewCount: viewCount ?? this.viewCount,
+        commentCount: commentCount ?? this.commentCount,
+        shareCount: shareCount ?? this.shareCount,
+        liked: liked ?? this.liked,
+      );
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -101,6 +147,12 @@ class SocialPost {
         if (sourceThreadId != null) 'sourceThreadId': sourceThreadId,
         if (sourceThreadTitle != null) 'sourceThreadTitle': sourceThreadTitle,
         'pendingSync': pendingSync,
+        if (reelId != null) 'reelId': reelId,
+        'likeCount': likeCount,
+        'viewCount': viewCount,
+        'commentCount': commentCount,
+        'shareCount': shareCount,
+        'liked': liked,
       };
 
   factory SocialPost.fromJson(Map<String, dynamic> j) => SocialPost(
@@ -118,6 +170,12 @@ class SocialPost {
         sourceThreadId: j['sourceThreadId'] as String?,
         sourceThreadTitle: j['sourceThreadTitle'] as String?,
         pendingSync: j['pendingSync'] as bool? ?? false,
+        reelId: j['reelId'] as String?,
+        likeCount: (j['likeCount'] as num?)?.toInt() ?? 0,
+        viewCount: (j['viewCount'] as num?)?.toInt() ?? 0,
+        commentCount: (j['commentCount'] as num?)?.toInt() ?? 0,
+        shareCount: (j['shareCount'] as num?)?.toInt() ?? 0,
+        liked: j['liked'] as bool? ?? false,
       );
 }
 

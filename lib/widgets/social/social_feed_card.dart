@@ -9,7 +9,7 @@ import 'package:flutter/material.dart';
 import '../../models/social_post.dart';
 import '../../utils/chat_formatters.dart';
 import '../user_avatar.dart';
-import 'social_reels_viewer.dart';
+import '../../services/social_reels_viewer_launcher.dart';
 
 class SocialFeedCard extends StatelessWidget {
   const SocialFeedCard({
@@ -99,8 +99,9 @@ class _MediaPreview extends StatelessWidget {
     return GestureDetector(
       onTap: () {
         final idx = allMediaPosts.indexWhere((p) => p.id == post.id);
-        SocialReelsViewer.open(
+        SocialReelsViewerLauncher.instance.open(
           context,
+          authorId: post.authorId,
           posts: allMediaPosts,
           initialIndex: idx >= 0 ? idx : 0,
         );

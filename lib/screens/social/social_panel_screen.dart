@@ -19,7 +19,7 @@ import '../../services/social_feed_service.dart';
 import '../../services/talk_api.dart';
 import '../../widgets/branded_app_bar.dart';
 import '../../widgets/social/social_feed_card.dart';
-import '../../widgets/social/social_reels_viewer.dart';
+import '../../services/social_reels_viewer_launcher.dart';
 import '../../widgets/social/social_stories_row.dart';
 import '../../widgets/user_avatar.dart';
 
@@ -322,8 +322,12 @@ class _SocialPanelScreenState extends ConsumerState<SocialPanelScreen>
     await _reload();
   }
 
-  void _openStories(String authorId, List<SocialPost> posts) {
-    SocialReelsViewer.open(context, posts: posts);
+  Future<void> _openStories(String authorId, List<SocialPost> posts) async {
+    await SocialReelsViewerLauncher.instance.open(
+      context,
+      authorId: authorId,
+      posts: posts,
+    );
   }
 
   @override
