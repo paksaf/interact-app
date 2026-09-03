@@ -18,6 +18,7 @@ import 'package:http/http.dart' as http;
 
 import 'auth_service.dart';
 import 'api_base.dart';
+import '../models/guest_join.dart';
 
 String get _kBase => ApiBase.current;
 const _kTimeout = Duration(seconds: 20);
@@ -331,6 +332,115 @@ class LiveApi {
       return v is Map ? Map<String, dynamic>.from(v) : null;
     } catch (_) {
       return null;
+    }
+  }
+
+  Map<String, dynamic> _extractData(Map<String, dynamic>? body) {
+    if (body == null) return {};
+    final data = body['data'];
+    if (data is Map<String, dynamic>) return data;
+    if (data is Map) return Map<String, dynamic>.from(data);
+    return body;
+  }
+
+  // ── Guest join (host) ───────────────────────────────────────────────
+
+  /// GET /api/v1/talk/live/guest-policy?code=CODE — null when unavailable.
+  Future<GuestPolicyState?> getGuestPolicy(String code) async {
+    try {
+      final res = await http
+          .get(
+            Uri.parse(
+              '$_kBase/api/v1/talk/live/guest-policy?code=${Uri.encodeComponent(code)}',
+            ),
+            headers: await _headers(),
+          )
+          .timeout(_kTimeout);
+      if (res.statusCode == 404) return null;
+      if (res.statusCode >= 400) return null;
+      final body = _decode(res.body);
+      return GuestPolicyState.fromData(_extractData(body));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// PUT /api/v1/talk/live/guest-policy — throws [LiveApiException] on 4xx.
+  Future<GuestPolicyState> putGuestPolicy({
+    required String code,
+    required GuestAdmissionPolicy policy,
+    GuestJoinRole guestRole = GuestJoinRole.speaker,
+    String? passcode,
+  }) async {
+    final res = await http
+        .put(
+          Uri.parse('$_kBase/api/v1/talk/live/guest-policy'),
+          headers: await _headers(),
+          body: jsonEncode({
+            'code': code,
+            'policy': policy.wire,
+            'guestRole': guestRole.wire,
+            if (passcode != null && passcode.isNotEmpty) 'passcode': passcode,
+          }),
+        )
+        .timeout(_kTimeout);
+    final body = _decode(res.body);
+    if (res.statusCode >= 400) {
+      final msg = (body?['error'] is Map)
+          ? (body!['error']['message'] as String?)
+          : null;
+      throw LiveApiException(
+        msg ?? 'Could not update guest policy (${res.statusCode}).',
+        statusCode: res.statusCode,
+      );
+    }
+    return GuestPolicyState.fromData(_extractData(body));
+  }
+
+  /// GET /api/v1/talk/live/guest-requests?code=CODE
+  Future<List<GuestJoinRequest>> getGuestRequests(String code) async {
+    try {
+      final res = await http
+          .get(
+            Uri.parse(
+              '$_kBase/api/v1/talk/live/guest-requests?code=${Uri.encodeComponent(code)}',
+            ),
+            headers: await _headers(),
+          )
+          .timeout(_kTimeout);
+      if (res.statusCode >= 400) return const [];
+      final body = _decode(res.body);
+      final data = _extractData(body);
+      final waiting = data['waiting'];
+      if (waiting is! List) return const [];
+      return waiting
+          .whereType<Map>()
+          .map((e) => GuestJoinRequest.fromJson(Map<String, dynamic>.from(e)))
+          .where((r) => r.id.isNotEmpty)
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// POST /api/v1/talk/live/guest-requests/{id}/decide
+  Future<bool> decideGuestRequest({
+    required String requestId,
+    required String decision,
+  }) async {
+    try {
+      final res = await http
+          .post(
+            Uri.parse(
+              '$_kBase/api/v1/talk/live/guest-requests/${Uri.encodeComponent(requestId)}/decide',
+            ),
+            headers: await _headers(),
+            body: jsonEncode({'decision': decision}),
+          )
+          .timeout(_kTimeout);
+      return res.statusCode >= 200 && res.statusCode < 300;
+    } catch (_) {
+      return false;
     }
   }
 }

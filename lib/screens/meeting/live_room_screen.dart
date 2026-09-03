@@ -21,12 +21,15 @@ import 'package:livekit_client/livekit_client.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../l10n/app_localizations.dart';
+import '../../models/guest_join.dart';
 import '../../services/camera_effects.dart';
 import '../../services/live_api.dart';
 import '../../services/live_room_presence_service.dart';
 import '../../services/livekit_service.dart';
 import '../../services/talk_api.dart';
 import '../../widgets/in_call_busy_banner.dart';
+import '../../widgets/meeting/guest_join_host_sheet.dart';
+import '../../widgets/meeting/guest_waiting_room_panel.dart';
 
 class LiveRoomScreen extends ConsumerStatefulWidget {
   const LiveRoomScreen({
@@ -67,8 +70,15 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen>
   LiveRoomPresenceService? _presence;
   LiveRoomAnalytics _analytics = LiveRoomAnalytics.empty;
   StreamSubscription<LiveRoomAnalytics>? _analyticsSub;
+  GuestPolicyState _guestPolicy = GuestPolicyState.off;
+  List<GuestJoinRequest> _guestWaiting = const [];
+  Timer? _guestPollTimer;
+  bool _guestDeciding = false;
 
   bool get _isPtt => widget.mode == 'ptt';
+
+  bool get _canManageGuests =>
+      _ctrl.isHost || _ctrl.role == 'moderator' || _ctrl.role == 'host';
 
   @override
   void initState() {
@@ -150,6 +160,9 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen>
         _starting = false;
         if (_ctrl.error == null) _reconnectAttempts = 0; // good link → reset budget
       });
+      if (canPoll) {
+        unawaited(_loadGuestPolicy());
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -160,6 +173,8 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen>
   }
 
   Future<void> _leave() async {
+    _guestPollTimer?.cancel();
+    _guestPollTimer = null;
     await _analyticsSub?.cancel();
     _analyticsSub = null;
     await _presence?.stop();
@@ -185,6 +200,7 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _guestPollTimer?.cancel();
     unawaited(_analyticsSub?.cancel());
     unawaited(_presence?.stop());
     WakelockPlus.disable();
@@ -251,6 +267,14 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen>
                       ),
                     ),
                   if (_isPtt) _pttHoldPad(),
+                  if (_canManageGuests &&
+                      _guestPolicy.policy == GuestAdmissionPolicy.admit)
+                    GuestWaitingRoomPanel(
+                      waiting: _guestWaiting,
+                      busy: _guestDeciding,
+                      onAdmit: (r) => _decideGuest(r, 'admit'),
+                      onDeny: (r) => _decideGuest(r, 'deny'),
+                    ),
                   _controlBar(),
                 ],
               );
@@ -611,6 +635,78 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen>
     );
   }
 
+  // ── Guest join (host) ──────────────────────────────────────────────
+  Future<void> _loadGuestPolicy() async {
+    if (!_canManageGuests || !_ctrl.connected) return;
+    final code = _ctrl.roomCode;
+    if (code.isEmpty) return;
+    final policy = await ref.read(liveApiProvider).getGuestPolicy(code);
+    if (!mounted || policy == null) return;
+    setState(() => _guestPolicy = policy);
+    _syncGuestPolling();
+  }
+
+  void _syncGuestPolling() {
+    _guestPollTimer?.cancel();
+    if (!_canManageGuests ||
+        !_ctrl.connected ||
+        _guestPolicy.policy != GuestAdmissionPolicy.admit) {
+      if (mounted && _guestWaiting.isNotEmpty) {
+        setState(() => _guestWaiting = const []);
+      }
+      return;
+    }
+    unawaited(_pollGuestWaiting());
+    _guestPollTimer = Timer.periodic(
+      const Duration(seconds: 4),
+      (_) => unawaited(_pollGuestWaiting()),
+    );
+  }
+
+  Future<void> _pollGuestWaiting() async {
+    if (!_canManageGuests ||
+        _guestPolicy.policy != GuestAdmissionPolicy.admit) {
+      return;
+    }
+    final code = _ctrl.roomCode;
+    if (code.isEmpty) return;
+    final list = await ref.read(liveApiProvider).getGuestRequests(code);
+    if (!mounted) return;
+    setState(() => _guestWaiting = list);
+  }
+
+  void _onGuestPolicyUpdated(GuestPolicyState updated) {
+    setState(() => _guestPolicy = updated);
+    _syncGuestPolling();
+  }
+
+  Future<void> _openGuestJoinSheet() async {
+    await showGuestJoinHostSheet(
+      context,
+      roomCode: _ctrl.roomCode,
+      initial: _guestPolicy,
+      onUpdated: _onGuestPolicyUpdated,
+    );
+  }
+
+  Future<void> _decideGuest(GuestJoinRequest request, String decision) async {
+    if (_guestDeciding) return;
+    setState(() => _guestDeciding = true);
+    final ok = await ref.read(liveApiProvider).decideGuestRequest(
+          requestId: request.id,
+          decision: decision,
+        );
+    if (!mounted) return;
+    setState(() => _guestDeciding = false);
+    if (ok) {
+      unawaited(_pollGuestWaiting());
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not update guest — try again')),
+      );
+    }
+  }
+
   // ── Moderation (host/moderator) ────────────────────────────────────
   Future<void> _moderate(String identity, String action) async {
     if (action == 'remove') {
@@ -706,6 +802,28 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen>
             ),
           ],
           const Spacer(),
+          if (_canManageGuests && _guestWaiting.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: _chip(
+                Icons.meeting_room,
+                '${_guestWaiting.length} waiting',
+                accent: true,
+              ),
+            ),
+          if (_canManageGuests && _guestPolicy.guestsEnabled)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: _chip(
+                Icons.person_add_alt_1,
+                switch (_guestPolicy.policy) {
+                  GuestAdmissionPolicy.passcode => 'Guests · passcode',
+                  GuestAdmissionPolicy.admit => 'Guests · waiting room',
+                  GuestAdmissionPolicy.off => 'Guests',
+                },
+                accent: true,
+              ),
+            ),
           if (hands > 0)
             _chip(Icons.front_hand, '$hands raised', accent: true),
         ],
@@ -866,6 +984,15 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen>
           onPressed: _showReactionPicker,
         ),
       ],
+      if (canModerate)
+        _TvControlButton(
+          icon: Icons.person_add_alt_1,
+          label: _guestWaiting.isNotEmpty
+              ? 'Guests (${_guestWaiting.length})'
+              : 'Guests',
+          accent: _guestPolicy.guestsEnabled,
+          onPressed: _openGuestJoinSheet,
+        ),
       // Audio-route picker — deliberately OUTSIDE the !_isPtt guard so the
       // WALKIE screen has it too (operator report 2026-08-27: walkie had no
       // way to route to a Bluetooth speaker/headset).
