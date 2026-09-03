@@ -296,4 +296,62 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get themeReset => 'Reset to Signal + System';
+
+  @override
+  String get chatWallpaperTitle => 'Chat wallpaper';
+
+  @override
+  String get chatWallpaperSubtitle => 'Global background for all chats';
+
+  @override
+  String get chatWallpaperThreadTitle => 'Wallpaper for this chat';
+
+  @override
+  String get chatWallpaperThreadHint =>
+      'Overrides your global wallpaper for this thread only.';
+
+  @override
+  String get chatWallpaperPresets => 'Presets';
+
+  @override
+  String get chatWallpaperPresetOffice => 'Office';
+
+  @override
+  String get chatWallpaperPresetBrand => 'Brand';
+
+  @override
+  String get chatWallpaperPresetWarm => 'Warm';
+
+  @override
+  String get chatWallpaperPresetSignal => 'Signal';
+
+  @override
+  String get chatWallpaperPickImage => 'Photo';
+
+  @override
+  String get chatWallpaperPickVideo => 'Video loop';
+
+  @override
+  String get chatWallpaperDim => 'Dim overlay';
+
+  @override
+  String get chatWallpaperBlur => 'Blur';
+
+  @override
+  String get chatWallpaperScrim => 'Legibility scrim';
+
+  @override
+  String get chatWallpaperScrimNone => 'None';
+
+  @override
+  String get chatWallpaperScrimLight => 'Light';
+
+  @override
+  String get chatWallpaperScrimDark => 'Dark';
+
+  @override
+  String get chatWallpaperReset => 'Remove wallpaper';
+
+  @override
+  String get chatWallpaperUseGlobal => 'Use global wallpaper';
 }

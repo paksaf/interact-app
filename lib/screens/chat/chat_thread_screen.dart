@@ -53,7 +53,9 @@ import '../../utils/phone_normalize.dart';
 import '../../widgets/chat/offline_chat_banner.dart';
 import '../../widgets/chat/location_pin_bubble.dart';
 import '../../widgets/chat/offline_peer_sheet.dart';
+import '../../widgets/chat/chat_wallpaper_layer.dart';
 import '../../widgets/sms_fallback_sheet.dart';
+import '../settings/chat_wallpaper_settings_screen.dart';
 import 'chat_ai_actions.dart';
 import 'message_search_screen.dart';
 import 'communities_screen.dart';
@@ -1485,6 +1487,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
+      backgroundColor: Colors.transparent,
       appBar: AppBar(
         titleSpacing: 0,
         title: Row(
@@ -1621,6 +1624,16 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
             tooltip: 'Voice call',
             onPressed: () => _startCall(mode: 'voice'),
           ),
+          IconButton(
+            icon: const Icon(Icons.wallpaper_outlined),
+            tooltip: 'Chat wallpaper',
+            onPressed: () => showChatWallpaperEditor(
+              context,
+              ref,
+              scope: ChatWallpaperEditorScope.thread,
+              threadId: widget.thread.id,
+            ),
+          ),
           PopupMenuButton<int>(
             tooltip: 'Disappearing messages',
             icon: Icon(
@@ -1647,7 +1660,11 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
             ),
         ],
       ),
-      body: Column(
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          ChatWallpaperLayer(threadId: widget.thread.id),
+          Column(
         children: [
           if (!_isLocalOnlyThread)
             OfflineChatBanner(
@@ -1981,6 +1998,8 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
             onDictate: _toggleDictate,
           ),
           ],
+        ],
+          ),
         ],
       ),
     );

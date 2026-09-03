@@ -292,4 +292,62 @@ class AppLocalizationsPa extends AppLocalizations {
 
   @override
   String get themeReset => 'Signal + System تے واپس';
+
+  @override
+  String get chatWallpaperTitle => 'چیٹ وال پیپر';
+
+  @override
+  String get chatWallpaperSubtitle => 'ساریاں چیٹاں لئی پس منظر';
+
+  @override
+  String get chatWallpaperThreadTitle => 'ایس چیٹ دا وال پیپر';
+
+  @override
+  String get chatWallpaperThreadHint =>
+      'صرف ایس تھریڈ لئی عالمی وال پیپر اوور رائڈ کردا اے۔';
+
+  @override
+  String get chatWallpaperPresets => 'پری سیٹ';
+
+  @override
+  String get chatWallpaperPresetOffice => 'آفس';
+
+  @override
+  String get chatWallpaperPresetBrand => 'برانڈ';
+
+  @override
+  String get chatWallpaperPresetWarm => 'گرم';
+
+  @override
+  String get chatWallpaperPresetSignal => 'Signal';
+
+  @override
+  String get chatWallpaperPickImage => 'تصویر';
+
+  @override
+  String get chatWallpaperPickVideo => 'ویڈیو لوپ';
+
+  @override
+  String get chatWallpaperDim => 'مدھم';
+
+  @override
+  String get chatWallpaperBlur => 'دھندلا';
+
+  @override
+  String get chatWallpaperScrim => 'پڑھن دا پردہ';
+
+  @override
+  String get chatWallpaperScrimNone => 'کوئی نہیں';
+
+  @override
+  String get chatWallpaperScrimLight => 'ہلکا';
+
+  @override
+  String get chatWallpaperScrimDark => 'گہرا';
+
+  @override
+  String get chatWallpaperReset => 'وال پیپر ہٹاؤ';
+
+  @override
+  String get chatWallpaperUseGlobal => 'عالمی وال پیپر ورتو';
 }

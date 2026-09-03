@@ -295,4 +295,62 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get themeReset => 'Сброс Signal + System';
+
+  @override
+  String get chatWallpaperTitle => 'Обои чата';
+
+  @override
+  String get chatWallpaperSubtitle => 'Общий фон для всех чатов';
+
+  @override
+  String get chatWallpaperThreadTitle => 'Обои этого чата';
+
+  @override
+  String get chatWallpaperThreadHint =>
+      'Переопределяет общие обои только для этого чата.';
+
+  @override
+  String get chatWallpaperPresets => 'Пресеты';
+
+  @override
+  String get chatWallpaperPresetOffice => 'Офис';
+
+  @override
+  String get chatWallpaperPresetBrand => 'Бренд';
+
+  @override
+  String get chatWallpaperPresetWarm => 'Тёплый';
+
+  @override
+  String get chatWallpaperPresetSignal => 'Signal';
+
+  @override
+  String get chatWallpaperPickImage => 'Фото';
+
+  @override
+  String get chatWallpaperPickVideo => 'Видео-цикл';
+
+  @override
+  String get chatWallpaperDim => 'Затемнение';
+
+  @override
+  String get chatWallpaperBlur => 'Размытие';
+
+  @override
+  String get chatWallpaperScrim => 'Пелена читаемости';
+
+  @override
+  String get chatWallpaperScrimNone => 'Нет';
+
+  @override
+  String get chatWallpaperScrimLight => 'Светлая';
+
+  @override
+  String get chatWallpaperScrimDark => 'Тёмная';
+
+  @override
+  String get chatWallpaperReset => 'Убрать обои';
+
+  @override
+  String get chatWallpaperUseGlobal => 'Использовать общие обои';
 }

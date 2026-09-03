@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0
 //
-// Coordinates fail-soft IL reminder + Talk theme mirrors on app open/resume.
+// Coordinates fail-soft IL reminder + Talk theme/wallpaper mirrors on open/resume.
 // Waits for SharedPreferences + a valid bearer before flushing.
 
 import 'package:flutter/foundation.dart';
@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/l10n/locale_prefs.dart';
 import '../core/theme/theme_prefs.dart';
+import '../core/theme/chat_wallpaper_prefs.dart';
 import 'auth_service.dart';
 import 'welcome_memory_store.dart';
 
@@ -64,6 +65,13 @@ class PendingMirrorSync {
       await theme.syncWithServerOnOpen();
     } else {
       await theme.flushPendingPush();
+    }
+
+    final wallpaper = ref.read(chatWallpaperControllerProvider.notifier);
+    if (cold) {
+      await wallpaper.syncWithServerOnOpen();
+    } else {
+      await wallpaper.flushPendingPush();
     }
 
     if (kDebugMode) debugPrint('[PendingMirrorSync] flush done');

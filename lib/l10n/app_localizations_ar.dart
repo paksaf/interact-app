@@ -294,4 +294,62 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get themeReset => 'إعادة Signal + System';
+
+  @override
+  String get chatWallpaperTitle => 'خلفية الدردشة';
+
+  @override
+  String get chatWallpaperSubtitle => 'خلفية عامة لكل المحادثات';
+
+  @override
+  String get chatWallpaperThreadTitle => 'خلفية هذه المحادثة';
+
+  @override
+  String get chatWallpaperThreadHint =>
+      'تتجاوز الخلفية العامة لهذا الموضوع فقط.';
+
+  @override
+  String get chatWallpaperPresets => 'الإعدادات المسبقة';
+
+  @override
+  String get chatWallpaperPresetOffice => 'مكتب';
+
+  @override
+  String get chatWallpaperPresetBrand => 'العلامة';
+
+  @override
+  String get chatWallpaperPresetWarm => 'دافئ';
+
+  @override
+  String get chatWallpaperPresetSignal => 'Signal';
+
+  @override
+  String get chatWallpaperPickImage => 'صورة';
+
+  @override
+  String get chatWallpaperPickVideo => 'حلقة فيديو';
+
+  @override
+  String get chatWallpaperDim => 'تعتيم';
+
+  @override
+  String get chatWallpaperBlur => 'ضبابية';
+
+  @override
+  String get chatWallpaperScrim => 'طبقة القراءة';
+
+  @override
+  String get chatWallpaperScrimNone => 'بدون';
+
+  @override
+  String get chatWallpaperScrimLight => 'فاتح';
+
+  @override
+  String get chatWallpaperScrimDark => 'داكن';
+
+  @override
+  String get chatWallpaperReset => 'إزالة الخلفية';
+
+  @override
+  String get chatWallpaperUseGlobal => 'استخدام الخلفية العامة';
 }

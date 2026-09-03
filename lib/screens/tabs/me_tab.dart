@@ -744,6 +744,12 @@ class _MeTabState extends ConsumerState<MeTab> {
                 onTap: () => context.push('/settings/theme'),
               ),
               _Tile(
+                icon: Icons.wallpaper_outlined,
+                label: l10n.chatWallpaperTitle,
+                subtitle: l10n.chatWallpaperSubtitle,
+                onTap: () => context.push('/settings/chat-wallpaper'),
+              ),
+              _Tile(
                 icon: Icons.groups_2_outlined,
                 label: l10n.communities,
                 subtitle: l10n.communitiesSubtitle,

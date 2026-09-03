@@ -32,6 +32,7 @@ import 'screens/camera/camera_effects_screen.dart';
 import 'screens/contacts/device_contacts_screen.dart';
 import 'screens/me/backup_screen.dart';
 import 'screens/settings/theme_settings_screen.dart';
+import 'screens/settings/chat_wallpaper_settings_screen.dart';
 import 'screens/chat/chat_thread_screen.dart';
 import 'screens/chat/chat_thread_loader.dart';
 import 'screens/chat/communities_screen.dart';
@@ -325,6 +326,9 @@ final _router = GoRouter(
     GoRoute(
         path: '/settings/theme',
         builder: (_, __) => const ThemeSettingsScreen()),
+    GoRoute(
+        path: '/settings/chat-wallpaper',
+        builder: (_, __) => const ChatWallpaperSettingsScreen()),
     GoRoute(path: '/new-group', builder: (_, __) => const NewGroupScreen()),
     GoRoute(
       path: '/approve-login',

@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:interact/core/theme/chat_wallpaper_prefs.dart';
 import 'package:interact/core/theme/theme_prefs.dart';
 import 'package:interact/services/pending_mirror_sync.dart';
 import 'package:interact/services/talk_theme_sync_service.dart';
+import 'package:interact/services/talk_wallpaper_sync_service.dart';
 import 'package:interact/services/welcome_memory_store.dart';
 
 void main() {
@@ -132,6 +134,44 @@ void main() {
       expect(
         presetIdForColors(Colors.pink, Colors.cyan),
         'custom',
+      );
+    });
+  });
+
+  group('wallpaper sync helpers', () {
+    test('default wallpaper is none', () {
+      expect(isDefaultLocalWallpaper(const ChatWallpaperConfig()), isTrue);
+      expect(
+        isDefaultLocalWallpaper(
+          const ChatWallpaperConfig(kind: ChatWallpaperKind.asset, asset: 'x'),
+        ),
+        isFalse,
+      );
+    });
+
+    test('dim round-trips server ints', () {
+      expect(wallpaperDimToServer(0.35), 35);
+      expect(wallpaperDimFromServer(35), 0.35);
+    });
+
+    test('preset id maps to bundled asset', () {
+      expect(presetIdFromAsset('assets/backgrounds/bg_warm.png'), 'warm');
+      expect(assetFromPresetId('warm'), 'assets/backgrounds/bg_warm.png');
+    });
+
+    test('relativeUploadsPath accepts absolute talk URLs', () {
+      expect(
+        relativeUploadsPath('https://qurbanisahulat.com/uploads/wall.jpg'),
+        '/uploads/wall.jpg',
+      );
+      expect(relativeUploadsPath('/uploads/wall.jpg'), '/uploads/wall.jpg');
+    });
+
+    test('scrim auto maps to none locally', () {
+      expect(wallpaperScrimFromServer('auto'), ChatWallpaperScrim.none);
+      expect(
+        wallpaperScrimToServer(ChatWallpaperScrim.dark),
+        'dark',
       );
     });
   });

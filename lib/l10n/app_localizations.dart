@@ -669,6 +669,120 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Reset to Signal + System'**
   String get themeReset;
+
+  /// No description provided for @chatWallpaperTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Chat wallpaper'**
+  String get chatWallpaperTitle;
+
+  /// No description provided for @chatWallpaperSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Global background for all chats'**
+  String get chatWallpaperSubtitle;
+
+  /// No description provided for @chatWallpaperThreadTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Wallpaper for this chat'**
+  String get chatWallpaperThreadTitle;
+
+  /// No description provided for @chatWallpaperThreadHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Overrides your global wallpaper for this thread only.'**
+  String get chatWallpaperThreadHint;
+
+  /// No description provided for @chatWallpaperPresets.
+  ///
+  /// In en, this message translates to:
+  /// **'Presets'**
+  String get chatWallpaperPresets;
+
+  /// No description provided for @chatWallpaperPresetOffice.
+  ///
+  /// In en, this message translates to:
+  /// **'Office'**
+  String get chatWallpaperPresetOffice;
+
+  /// No description provided for @chatWallpaperPresetBrand.
+  ///
+  /// In en, this message translates to:
+  /// **'Brand'**
+  String get chatWallpaperPresetBrand;
+
+  /// No description provided for @chatWallpaperPresetWarm.
+  ///
+  /// In en, this message translates to:
+  /// **'Warm'**
+  String get chatWallpaperPresetWarm;
+
+  /// No description provided for @chatWallpaperPresetSignal.
+  ///
+  /// In en, this message translates to:
+  /// **'Signal'**
+  String get chatWallpaperPresetSignal;
+
+  /// No description provided for @chatWallpaperPickImage.
+  ///
+  /// In en, this message translates to:
+  /// **'Photo'**
+  String get chatWallpaperPickImage;
+
+  /// No description provided for @chatWallpaperPickVideo.
+  ///
+  /// In en, this message translates to:
+  /// **'Video loop'**
+  String get chatWallpaperPickVideo;
+
+  /// No description provided for @chatWallpaperDim.
+  ///
+  /// In en, this message translates to:
+  /// **'Dim overlay'**
+  String get chatWallpaperDim;
+
+  /// No description provided for @chatWallpaperBlur.
+  ///
+  /// In en, this message translates to:
+  /// **'Blur'**
+  String get chatWallpaperBlur;
+
+  /// No description provided for @chatWallpaperScrim.
+  ///
+  /// In en, this message translates to:
+  /// **'Legibility scrim'**
+  String get chatWallpaperScrim;
+
+  /// No description provided for @chatWallpaperScrimNone.
+  ///
+  /// In en, this message translates to:
+  /// **'None'**
+  String get chatWallpaperScrimNone;
+
+  /// No description provided for @chatWallpaperScrimLight.
+  ///
+  /// In en, this message translates to:
+  /// **'Light'**
+  String get chatWallpaperScrimLight;
+
+  /// No description provided for @chatWallpaperScrimDark.
+  ///
+  /// In en, this message translates to:
+  /// **'Dark'**
+  String get chatWallpaperScrimDark;
+
+  /// No description provided for @chatWallpaperReset.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove wallpaper'**
+  String get chatWallpaperReset;
+
+  /// No description provided for @chatWallpaperUseGlobal.
+  ///
+  /// In en, this message translates to:
+  /// **'Use global wallpaper'**
+  String get chatWallpaperUseGlobal;
 }
 
 class _AppLocalizationsDelegate

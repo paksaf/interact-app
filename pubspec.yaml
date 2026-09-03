@@ -194,6 +194,12 @@ dependencies:
   # version needing a newer SDK). See _InlineVideo in chat_thread_screen.
   video_player: ^2.9.2
 
+  # ── Chat wallpaper (Phase 1 personalization) ───────────────────────
+  # image_cropper: native crop UI before applying a photo wallpaper (≤1080p).
+  # video_trimmer 5.x: intl 0.20-compatible; trim gallery clips to ≤10s loops.
+  image_cropper: 8.0.2
+  video_trimmer: 5.0.0
+
   # ── Offline LAN discovery (Phase 1.5) ───────────────────────────────
   # Bonsoir mDNS broadcast/discover. Combined with flutter_webrtc, this
   # enables peer-to-peer audio/video/text without ANY internet —

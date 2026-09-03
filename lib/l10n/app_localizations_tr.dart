@@ -297,4 +297,62 @@ class AppLocalizationsTr extends AppLocalizations {
 
   @override
   String get themeReset => 'Signal + System\'e sıfırla';
+
+  @override
+  String get chatWallpaperTitle => 'Sohbet duvar kağıdı';
+
+  @override
+  String get chatWallpaperSubtitle => 'Tüm sohbetler için genel arka plan';
+
+  @override
+  String get chatWallpaperThreadTitle => 'Bu sohbetin duvar kağıdı';
+
+  @override
+  String get chatWallpaperThreadHint =>
+      'Yalnızca bu konu için genel duvar kağıdını geçersiz kılar.';
+
+  @override
+  String get chatWallpaperPresets => 'Hazır';
+
+  @override
+  String get chatWallpaperPresetOffice => 'Ofis';
+
+  @override
+  String get chatWallpaperPresetBrand => 'Marka';
+
+  @override
+  String get chatWallpaperPresetWarm => 'Sıcak';
+
+  @override
+  String get chatWallpaperPresetSignal => 'Signal';
+
+  @override
+  String get chatWallpaperPickImage => 'Fotoğraf';
+
+  @override
+  String get chatWallpaperPickVideo => 'Video döngüsü';
+
+  @override
+  String get chatWallpaperDim => 'Karartma';
+
+  @override
+  String get chatWallpaperBlur => 'Bulanıklık';
+
+  @override
+  String get chatWallpaperScrim => 'Okunabilirlik perdesi';
+
+  @override
+  String get chatWallpaperScrimNone => 'Yok';
+
+  @override
+  String get chatWallpaperScrimLight => 'Açık';
+
+  @override
+  String get chatWallpaperScrimDark => 'Koyu';
+
+  @override
+  String get chatWallpaperReset => 'Duvar kağıdını kaldır';
+
+  @override
+  String get chatWallpaperUseGlobal => 'Genel duvar kağıdını kullan';
 }
