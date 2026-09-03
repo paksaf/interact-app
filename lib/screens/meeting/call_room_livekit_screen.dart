@@ -30,6 +30,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/call_signaling.dart';
 import '../../services/callkit_service.dart';
+import '../../services/camera_effects.dart';
 import '../../services/live_api.dart';
 import '../../services/livekit_service.dart';
 import '../../services/talk_api.dart';
@@ -175,6 +176,12 @@ class _CallRoomLiveKitScreenState
       _callLogId = join.callLogId;
       _callStartedAt = DateTime.now();
       await _ctrl.connect(join);
+      if (!mounted) return;
+      final effect = ref.read(cameraEffectProvider);
+      if (effect != CameraEffect.none && widget.mode == 'video') {
+        if (!_ctrl.camOn) await _ctrl.toggleCamera();
+        await _ctrl.applyCameraEffect(effect);
+      }
       if (!mounted) return;
       setState(() => _starting = false);
     } catch (e) {
@@ -434,16 +441,18 @@ class _CallRoomLiveKitScreenState
     final remote = _remoteTile;
     final local = _localTile;
     final connecting = remote == null;
+    final share = _ctrl.screenShareTile;
     return Stack(
       children: [
-        // Background: remote video once the peer joins; else, on a video call,
-        // the local camera preview so the caller isn't staring at black.
+        // Background: screen share > remote video > local preview while ringing.
         Positioned.fill(
-          child: (remote != null && remote.hasVideo)
-              ? VideoTrackRenderer(remote.videoTrack!)
-              : (connecting && local != null && local.hasVideo)
-                  ? VideoTrackRenderer(local.videoTrack!)
-                  : Container(color: Colors.black),
+          child: share != null && share.hasVideo
+              ? VideoTrackRenderer(share.videoTrack!)
+              : (remote != null && remote.hasVideo)
+                  ? VideoTrackRenderer(remote.videoTrack!)
+                  : (connecting && local != null && local.hasVideo)
+                      ? VideoTrackRenderer(local.videoTrack!)
+                      : Container(color: Colors.black),
         ),
         // "Calling…" overlay until the peer connects.
         if (connecting)
@@ -485,8 +494,79 @@ class _CallRoomLiveKitScreenState
             ),
           ),
         if (_ctrl.captionText.isNotEmpty) _captionOverlay(),
+        if (_ctrl.flashEmoji != null)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: Center(
+                child: Text(
+                  _ctrl.flashEmoji!,
+                  style: const TextStyle(fontSize: 110),
+                ),
+              ),
+            ),
+          ),
+        if (_ctrl.raisedHandCount > 0 && !connecting)
+          Positioned(
+            top: 72,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  _ctrl.handRaised ? 'You raised a hand' : 'Hand raised',
+                  style: const TextStyle(color: Colors.white),
+                ),
+              ),
+            ),
+          ),
         _controlBar(),
       ],
+    );
+  }
+
+  Future<void> _showVirtualBg() async {
+    await context.push('/camera-effects');
+    if (!mounted) return;
+    final effect = ref.read(cameraEffectProvider);
+    if (effect != CameraEffect.none && !_ctrl.camOn && widget.mode == 'video') {
+      await _ctrl.toggleCamera();
+    }
+    await _ctrl.applyCameraEffect(effect);
+    setState(() {});
+  }
+
+  void _showReactionPicker() {
+    const emojis = ['👍', '❤️', '😂', '🎉', '👏', '🔥', '😮', '🙏'];
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 8,
+            children: [
+              for (final e in emojis)
+                InkWell(
+                  onTap: () {
+                    _ctrl.sendReaction(e);
+                    Navigator.pop(ctx);
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Text(e, style: const TextStyle(fontSize: 32)),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -621,6 +701,40 @@ class _CallRoomLiveKitScreenState
               icon: Icons.cameraswitch,
               color: Colors.white,
               onTap: _ctrl.switchCamera,
+            ),
+            const SizedBox(width: 14),
+            if (widget.mode == 'video') ...[
+              _CtrlButton(
+                icon: ref.watch(cameraEffectProvider) != CameraEffect.none
+                    ? Icons.blur_on
+                    : Icons.blur_off,
+                color: ref.watch(cameraEffectProvider) != CameraEffect.none
+                    ? const Color(0xFFBE9A5F)
+                    : Colors.white,
+                onTap: _showVirtualBg,
+              ),
+              const SizedBox(width: 14),
+            ],
+            _CtrlButton(
+              icon: _ctrl.screenSharing
+                  ? Icons.stop_screen_share
+                  : Icons.screen_share,
+              color: _ctrl.screenSharing ? const Color(0xFFBE9A5F) : Colors.white,
+              onTap: _ctrl.toggleScreenShare,
+            ),
+            const SizedBox(width: 14),
+            _CtrlButton(
+              icon: Icons.front_hand,
+              color: _ctrl.handRaised ? const Color(0xFFBE9A5F) : Colors.white,
+              onTap: () => _ctrl.handRaised
+                  ? _ctrl.lowerHand()
+                  : _ctrl.raiseHand(),
+            ),
+            const SizedBox(width: 14),
+            _CtrlButton(
+              icon: Icons.emoji_emotions_outlined,
+              color: Colors.white,
+              onTap: _showReactionPicker,
             ),
             const SizedBox(width: 14),
             _CtrlButton(

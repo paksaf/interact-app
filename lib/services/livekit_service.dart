@@ -85,6 +85,7 @@ String deviceAreaString() {
 /// Data-channel message kinds (JSON over the LiveKit reliable channel).
 class _Msg {
   static const hand = 'hand';
+  static const reaction = 'reaction';
   static const muteAll = 'mute-all';
   static const end = 'end';
   static const role = 'role'; // promote/demote signal to a target identity
@@ -117,6 +118,9 @@ class LiveRoomController extends ChangeNotifier {
 
   /// Identities of remote participants whose hand is currently raised.
   final Set<String> _remoteHands = <String>{};
+
+  String? _flashEmoji;
+  Timer? _flashTimer;
 
   // ── Public state ───────────────────────────────────────────────────
   bool get connecting => _connecting;
@@ -152,6 +156,9 @@ class LiveRoomController extends ChangeNotifier {
   }
   int get raisedHandCount =>
       _remoteHands.length + (_handRaised ? 1 : 0);
+
+  /// Last in-call emoji reaction (local or remote) for a brief overlay flash.
+  String? get flashEmoji => _flashEmoji;
 
   /// All tiles (local first), ready to render.
   List<LiveTile> get tiles {
@@ -307,6 +314,9 @@ class LiveRoomController extends ChangeNotifier {
 
   Future<void> _teardown() async {
     try {
+      _flashTimer?.cancel();
+      _flashTimer = null;
+      _flashEmoji = null;
       _room?.removeListener(_onRoomChanged);
       await _listener?.dispose();
       await _room?.disconnect();
@@ -438,6 +448,23 @@ class LiveRoomController extends ChangeNotifier {
   Future<void> raiseHand() => _setHand(true);
   Future<void> lowerHand() => _setHand(false);
 
+  /// Broadcast an emoji reaction over the LiveKit data channel.
+  Future<void> sendReaction(String emoji) async {
+    if (emoji.isEmpty) return;
+    await _send({'t': _Msg.reaction, 'emoji': emoji});
+    _flashEmojiLocal(emoji);
+  }
+
+  void _flashEmojiLocal(String emoji) {
+    _flashEmoji = emoji;
+    notifyListeners();
+    _flashTimer?.cancel();
+    _flashTimer = Timer(const Duration(milliseconds: 1600), () {
+      _flashEmoji = null;
+      notifyListeners();
+    });
+  }
+
   Future<void> _setHand(bool up) async {
     _handRaised = up;
     await _send({'t': _Msg.hand, 'up': up});
@@ -511,6 +538,10 @@ class LiveRoomController extends ChangeNotifier {
           _remoteHands.remove(from);
         }
         notifyListeners();
+        break;
+      case _Msg.reaction:
+        final e = m['emoji'] as String?;
+        if (e != null && e.isNotEmpty) _flashEmojiLocal(e);
         break;
       case _Msg.muteAll:
         // A moderator asked everyone to mute. Honour it unless we moderate.

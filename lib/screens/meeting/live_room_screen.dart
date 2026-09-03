@@ -239,6 +239,17 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen>
                   _topBar(),
                   if (_showRoster) _rosterPanel(),
                   if (_ctrl.captionText.isNotEmpty) _captionOverlay(),
+                  if (_ctrl.flashEmoji != null)
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: Center(
+                          child: Text(
+                            _ctrl.flashEmoji!,
+                            style: const TextStyle(fontSize: 110),
+                          ),
+                        ),
+                      ),
+                    ),
                   if (_isPtt) _pttHoldPad(),
                   _controlBar(),
                 ],
@@ -571,6 +582,35 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen>
       _pinnedIdentity != null ||
       _followActiveSpeaker;
 
+  void _showReactionPicker() {
+    const emojis = ['👍', '❤️', '😂', '🎉', '👏', '🔥', '😮', '🙏'];
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 8,
+            children: [
+              for (final e in emojis)
+                InkWell(
+                  onTap: () {
+                    _ctrl.sendReaction(e);
+                    Navigator.pop(ctx);
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Text(e, style: const TextStyle(fontSize: 32)),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   // ── Moderation (host/moderator) ────────────────────────────────────
   Future<void> _moderate(String identity, String action) async {
     if (action == 'remove') {
@@ -819,6 +859,11 @@ class _LiveRoomScreenState extends ConsumerState<LiveRoomScreen>
           accent: _ctrl.handRaised,
           onPressed: () =>
               _ctrl.handRaised ? _ctrl.lowerHand() : _ctrl.raiseHand(),
+        ),
+        _TvControlButton(
+          icon: Icons.emoji_emotions_outlined,
+          label: 'React',
+          onPressed: _showReactionPicker,
         ),
       ],
       // Audio-route picker — deliberately OUTSIDE the !_isPtt guard so the
