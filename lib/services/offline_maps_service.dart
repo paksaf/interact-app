@@ -14,19 +14,19 @@ import 'package:flutter_map_tile_caching/flutter_map_tile_caching.dart';
 import 'package:http/io_client.dart';
 
 /// Carto Voyager raster basemap — same tiles interact-maps uses.
-// Key-free OpenTopoMap raster — topographic detail (contours, trails, tracks,
-// unpaved 4x4 roads) for off-roading + offline use. Carto keyless tiles are
-// watermarked server-side; vector PMTiles can't be used here (pmtiles needs
-// protobuf 3, livekit needs protobuf 6). OpenTopoMap is interact-maps' terrain
-// layer. Higher-volume alternative if rate-limited: TomTom (keyed).
+// Carto Voyager raster — the street basemap interact-maps-flutter uses (see
+// interact-maps/interact-maps-flutter/lib/core/map_tile_config.dart). Street-
+// level detail (roads, places, labels) to native zoom 18, keyless, subdomained
+// a-d, retina-capable via {r}. Replaced OpenTopoMap terrain (capped at z17, no
+// street detail). TomTom stays as a keyed fallback for rate-limit periods.
 const String kFriendMapTileUrl =
-    'https://tile.opentopomap.org/{z}/{x}/{y}.png';
-const List<String> kFriendMapSubdomains = <String>[]; // OSM: no {s}
-const int kFriendMapMaxNativeZoom = 17; // OpenTopoMap caps at 17
+    'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png';
+const List<String> kFriendMapSubdomains = <String>['a', 'b', 'c', 'd'];
+const int kFriendMapMaxNativeZoom = 18; // Carto Voyager serves to z18
 const double kFriendMapMaxZoom = 20.0;
 const double kFriendMapMinZoom = 2.0;
 const String kFriendMapAttribution =
-    '© OpenTopoMap (CC-BY-SA) © OpenStreetMap contributors';
+    '© OpenStreetMap contributors © CARTO';
 
 // TomTom raster FALLBACK (keyed) — only used when an OpenTopoMap tile fails to
 // load (flutter_map fallbackUrl). Key comes from a build-time define, NOT source,
@@ -48,7 +48,7 @@ String get kFriendMapUserAgent => Platform.isIOS
 /// FMTC store: browse cache + offline region packs share one store, so a
 /// downloaded area is served from disk automatically when the network drops.
 /// Bump suffix when tile URL/provider changes so stale error tiles are dropped.
-const String kFriendMapFmtcStore = 'friendmap_v2';
+const String kFriendMapFmtcStore = 'friendmap_v3';
 const String _kLegacyFriendMapStore = 'friendmap';
 
 IOClient _tileHttpClient() {
