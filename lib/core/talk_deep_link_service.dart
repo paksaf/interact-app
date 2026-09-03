@@ -2,8 +2,6 @@
 //
 // Cold + warm deep links for Talk (reels, join codes, approve-login).
 
-import 'dart:async';
-
 import 'package:app_links/app_links.dart';
 import 'package:flutter/foundation.dart';
 
@@ -14,7 +12,6 @@ class TalkDeepLinkService {
   static final TalkDeepLinkService instance = TalkDeepLinkService._();
 
   final AppLinks _appLinks = AppLinks();
-  StreamSubscription<Uri>? _sub;
   void Function(String location)? _onRoute;
   bool _started = false;
   String? _pendingLocation;
@@ -40,7 +37,7 @@ class TalkDeepLinkService {
     }
 
     try {
-      _sub = _appLinks.uriLinkStream.listen(
+      _appLinks.uriLinkStream.listen(
         _storeAndNavigate,
         onError: (Object e) => debugPrint('[TalkDeepLink] stream error: $e'),
       );

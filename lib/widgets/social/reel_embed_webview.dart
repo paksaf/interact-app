@@ -3,6 +3,7 @@
 // Renders TikTok / X oEmbed HTML inside the reels viewer (no client API keys).
 
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 class ReelEmbedWebView extends StatefulWidget {
@@ -22,6 +23,44 @@ class ReelEmbedWebView extends StatefulWidget {
 class _ReelEmbedWebViewState extends State<ReelEmbedWebView> {
   late final WebViewController _controller;
   bool _loading = true;
+
+  static bool _isAllowedEmbedNavigation(Uri uri, String baseUrl) {
+    if (uri.scheme == 'about' || uri.scheme == 'data') return true;
+    if (uri.scheme != 'http' && uri.scheme != 'https') return false;
+
+    final host = uri.host.toLowerCase();
+    final baseHost = Uri.tryParse(baseUrl)?.host.toLowerCase() ?? '';
+    if (baseHost.isNotEmpty &&
+        (host == baseHost || host.endsWith('.$baseHost'))) {
+      return true;
+    }
+
+    const allowed = {
+      'www.tiktok.com',
+      'tiktok.com',
+      'm.tiktok.com',
+      'vm.tiktok.com',
+      'twitter.com',
+      'www.twitter.com',
+      'mobile.twitter.com',
+      'x.com',
+      'www.x.com',
+      'platform.twitter.com',
+      'cdn.syndication.twimg.com',
+      'pbs.twimg.com',
+    };
+    if (allowed.contains(host)) return true;
+    if (host.endsWith('.tiktok.com') || host.endsWith('.twimg.com')) {
+      return true;
+    }
+    return false;
+  }
+
+  Future<void> _openExternally(Uri uri) async {
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  }
 
   @override
   void initState() {
@@ -46,6 +85,18 @@ class _ReelEmbedWebViewState extends State<ReelEmbedWebView> {
         NavigationDelegate(
           onPageFinished: (_) {
             if (mounted) setState(() => _loading = false);
+          },
+          onNavigationRequest: (request) {
+            final uri = Uri.tryParse(request.url);
+            if (uri == null) return NavigationDecision.prevent;
+            if (!request.isMainFrame) {
+              return NavigationDecision.navigate;
+            }
+            if (_isAllowedEmbedNavigation(uri, widget.baseUrl)) {
+              return NavigationDecision.navigate;
+            }
+            _openExternally(uri);
+            return NavigationDecision.prevent;
           },
         ),
       )
