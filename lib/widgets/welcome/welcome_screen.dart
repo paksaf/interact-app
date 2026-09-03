@@ -795,6 +795,11 @@ class _CrossAppChips extends StatelessWidget {
             label: 'Zeka',
             onTap: () => onOpen(WelcomeDonorLinks.zeka),
           ),
+          _MiniChip(
+            icon: Icons.help_outline,
+            label: 'Help',
+            onTap: () => context.push('/help'),
+          ),
         ],
       ),
     );

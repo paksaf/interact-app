@@ -94,7 +94,7 @@ class _InviteScreenState extends ConsumerState<InviteScreen> {
             ),
             const SizedBox(height: 12),
             TextButton(
-              onPressed: openAppSettings,
+              onPressed: () => openAppSettings(),
               child: const Text('Open settings'),
             ),
           ],

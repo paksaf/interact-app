@@ -32,6 +32,7 @@ import 'screens/camera/camera_effects_screen.dart';
 import 'screens/contacts/device_contacts_screen.dart';
 import 'screens/me/backup_screen.dart';
 import 'screens/notes/notes_screen.dart';
+import 'help/help_screen.dart';
 import 'screens/settings/theme_settings_screen.dart';
 import 'screens/settings/chat_wallpaper_settings_screen.dart';
 import 'screens/chat/chat_thread_screen.dart';
@@ -329,6 +330,7 @@ final _router = GoRouter(
         builder: (_, __) => const DeviceContactsScreen()),
     GoRoute(path: '/backup', builder: (_, __) => const BackupScreen()),
     GoRoute(path: '/notes', builder: (_, __) => const NotesScreen()),
+    GoRoute(path: '/help', builder: (_, __) => const HelpScreen()),
     GoRoute(
         path: '/settings/theme',
         builder: (_, __) => const ThemeSettingsScreen()),
